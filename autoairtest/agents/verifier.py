@@ -66,20 +66,33 @@ def _verify_order(
 ) -> PreliminaryJudgment:
     """验证期望文本序列是否按给定顺序出现在界面证据中。"""
 
+    missing = [expected for expected in goal.expected_entities if expected not in visible_texts]
+    unexpected = [text for text in visible_texts if text not in goal.expected_entities]
+    structured_details = {
+        "expected": goal.expected_entities,
+        "observed": visible_texts,
+        "missing": missing,
+        "unexpected": unexpected,
+    }
+    if missing or unexpected:
+        return PreliminaryJudgment(
+            goal_id=goal.goal_id,
+            preliminary_status=PreliminaryStatus.MANUAL_REQUIRED,
+            confidence=0.0,
+            basis=(
+                "Order evidence does not exactly match the expected sequence; "
+                f"missing={missing}, unexpected={unexpected}."
+            ),
+            evidence_files=list(evidence.get("evidence_files", [])),
+            human_review_required=True,
+            review_reason="verification_evidence_gap",
+            manual_review_reason="verification_evidence_gap",
+            structured_details=structured_details,
+        )
+
     positions: list[int] = []
     for expected in goal.expected_entities:
-        try:
-            positions.append(visible_texts.index(expected))
-        except ValueError:
-            return PreliminaryJudgment(
-                goal_id=goal.goal_id,
-                preliminary_status=PreliminaryStatus.UNCERTAIN,
-                confidence=0.0,
-                basis=f"Missing expected text: {expected}",
-                evidence_files=list(evidence.get("evidence_files", [])),
-                human_review_required=False,
-                review_reason="",
-            )
+        positions.append(visible_texts.index(expected))
 
     passed = positions == sorted(positions)
     return PreliminaryJudgment(
@@ -90,6 +103,7 @@ def _verify_order(
         evidence_files=list(evidence.get("evidence_files", [])),
         human_review_required=False,
         review_reason="",
+        structured_details=structured_details | {"positions": positions},
     )
 
 

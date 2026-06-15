@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 from autoairtest.models import (
+    ActionRiskLevel,
     ExecutionPlan,
+    InterpretationRationale,
     NaturalLanguageTestCase,
     PlanAction,
     VerificationGoal,
@@ -42,30 +44,35 @@ class RuleBasedPlanner:
             actions=self._actions_for(case.operation_description),
             verification_goals=self._goals_for(case),
             notes=["Rule-based offline plan; no Python code generated."],
+            interpretation_rationales=self._rationales_for(case.operation_description),
         )
 
     def _actions_for(self, operation: str) -> list[PlanAction]:
         """从操作描述中抽取导航、点击或观察动作。"""
 
-        targets: list[tuple[str, str, str]] = []
+        targets: list[tuple[str, str, str, list[str]]] = []
         if "行情" in operation:
-            targets.append(("navigate", "进入行情页", "行情"))
+            targets.append(("navigate", "进入行情页", "行情", ["ir_market"]))
         if "股指" in operation:
-            targets.append(("navigate", "进入股指区域", "股指"))
+            targets.append(("navigate", "进入股指区域", "股指", ["ir_stock_index"]))
         if "A股" in operation or "沪深京" in operation:
-            targets.append(("navigate", "进入A股沪深京区域", "沪深京"))
+            targets.append(("navigate", "进入A股沪深京区域", "沪深京", ["ir_a_share"]))
+        if operation.startswith("自选") or "自选：" in operation or "自选-" in operation:
+            targets.append(("navigate", "进入我的自选区域", "我的自选", ["ir_self_selected"]))
         if "国内指数" in operation:
-            targets.append(("navigate", "进入国内指数区域", "国内指数"))
+            targets.append(("navigate", "进入国内指数区域", "国内指数", ["ir_domestic_index"]))
         if "更多" in operation:
-            targets.append(("tap", "点击右侧更多按钮", "更多"))
+            targets.append(("tap", "点击右侧更多按钮", "更多", ["ir_more"]))
         if "科创综指" in operation and "点击" in operation:
-            targets.append(("tap", "点击科创综指", "科创综指"))
+            targets.append(("tap", "点击科创综指", "科创综指", ["ir_sse_star_index"]))
         if "底部指数" in operation:
-            targets.append(("tap", "点击底部指数入口", "底部指数"))
+            targets.append(("tap", "点击底部指数入口", "底部指数", ["ir_bottom_index"]))
         if "自选顶部指数" in operation:
-            targets.append(("tap", "点击自选顶部指数", "自选顶部指数"))
+            targets.append(("tap", "点击自选顶部指数", "自选顶部指数", ["ir_self_selected_top_index"]))
+        if "顶部指数" in operation and "自选顶部指数" not in operation:
+            targets.append(("tap", "点击顶部指数", "顶部指数", ["ir_top_index"]))
         if not targets:
-            targets.append(("observe", "观察当前页面", "当前页面"))
+            targets.append(("observe", "观察当前页面", "当前页面", ["ir_current_page"]))
 
         return [
             PlanAction(
@@ -75,9 +82,56 @@ class RuleBasedPlanner:
                 target=target,
                 target_context=operation,
                 preferred_locator="poco_semantic",
+                action_risk_level=ActionRiskLevel.LOW,
+                interpretation_rationale_ids=rationale_ids,
             )
-            for index, (intent, description, target) in enumerate(targets, start=1)
+            for index, (intent, description, target, rationale_ids) in enumerate(targets, start=1)
         ]
+
+    def _rationales_for(self, operation: str) -> list[InterpretationRationale]:
+        """生成当前规则 planner 能解释的结构化依据。"""
+
+        rationales: list[InterpretationRationale] = []
+        if operation.startswith("自选") or "自选：" in operation or "自选-" in operation:
+            rationales.append(
+                InterpretationRationale(
+                    rationale_id="ir_self_selected",
+                    original_expression="自选",
+                    normalized_meaning="我的自选",
+                    interpretation_type="navigation_alias",
+                    confidence=0.92,
+                    matched_skill_rules=["navigation_alias.self_selected"],
+                    basis="命中证券 App 导航别名规则：自选在当前 UI 中展示为我的自选。",
+                    human_review_required=False,
+                )
+            )
+
+        for rationale_id, original, normalized in [
+            ("ir_market", "行情", "行情"),
+            ("ir_stock_index", "股指", "股指"),
+            ("ir_a_share", "A股/沪深京", "沪深京"),
+            ("ir_domestic_index", "国内指数", "国内指数"),
+            ("ir_more", "右侧更多按钮", "当前模块右侧更多入口"),
+            ("ir_sse_star_index", "科创综指", "科创综指"),
+            ("ir_bottom_index", "底部指数", "底部指数入口"),
+            ("ir_self_selected_top_index", "自选顶部指数", "自选顶部指数"),
+            ("ir_top_index", "顶部指数", "顶部指数"),
+            ("ir_current_page", "当前页面", "当前页面"),
+        ]:
+            if original.replace("/沪深京", "") in operation or normalized in operation:
+                rationales.append(
+                    InterpretationRationale(
+                        rationale_id=rationale_id,
+                        original_expression=original,
+                        normalized_meaning=normalized,
+                        interpretation_type="target_normalization",
+                        confidence=0.86,
+                        matched_skill_rules=[f"planner_rule.{rationale_id.removeprefix('ir_')}"],
+                        basis=f"规则型 planner 从操作描述中识别到目标：{normalized}。",
+                        human_review_required=False,
+                    )
+                )
+        return rationales
 
     def _goals_for(self, case: NaturalLanguageTestCase) -> list[VerificationGoal]:
         """从预期结果和操作描述中抽取验证目标。"""

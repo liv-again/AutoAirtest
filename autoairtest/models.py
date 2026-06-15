@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from typing import Any
 
@@ -48,6 +48,14 @@ class RunStatus(SerializableEnum):
     UNCERTAIN = "uncertain"
 
 
+class ActionRiskLevel(SerializableEnum):
+    """执行动作的业务风险等级。"""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class VerificationGoalCategory(SerializableEnum):
     """验证目标的语义类别，用于选择不同的离线判断策略。"""
 
@@ -57,6 +65,20 @@ class VerificationGoalCategory(SerializableEnum):
     DATA_CORRECTNESS = "data_correctness"
     COLOR_RULE = "color_rule"
     TEXT_PRESENT = "text_present"
+
+
+@dataclass(frozen=True)
+class InterpretationRationale:
+    """Planning Agent 对关键自然语言解释给出的结构化依据。"""
+
+    rationale_id: str
+    original_expression: str
+    normalized_meaning: str
+    interpretation_type: str
+    confidence: float
+    matched_skill_rules: list[str]
+    basis: str
+    human_review_required: bool
 
 
 @dataclass(frozen=True)
@@ -92,6 +114,8 @@ class PlanAction:
     target: str
     target_context: str
     preferred_locator: str
+    action_risk_level: ActionRiskLevel = ActionRiskLevel.LOW
+    interpretation_rationale_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -116,6 +140,7 @@ class ExecutionPlan:
     actions: list[PlanAction]
     verification_goals: list[VerificationGoal]
     notes: list[str]
+    interpretation_rationales: list[InterpretationRationale] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -131,6 +156,38 @@ class ActionResult:
     element_summary_before: str
     element_summary_after: str
     notes: list[str]
+    execution_rationale_id: str = ""
+
+
+@dataclass(frozen=True)
+class ExecutionTrace:
+    """真实执行过程的追加式审计记录。"""
+
+    trace_id: str
+    trace_type: str
+    action_id: str
+    planned_target: str
+    normalized_target: str
+    candidate_elements: list[dict[str, Any]]
+    selected_element: dict[str, Any] | None
+    action_risk_level: ActionRiskLevel
+    execution_rationale: str
+    before_evidence: list[str]
+    after_evidence: list[str]
+    correction_step: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class PlanAmendment:
+    """执行期对原始执行计划的追加式补充，不覆盖原计划。"""
+
+    amendment_id: str
+    action_id: str
+    original_target: str
+    resolved_target: str
+    reason: str
+    matched_skill_rules: list[str]
+    evidence_files: list[str]
 
 
 @dataclass(frozen=True)
@@ -147,6 +204,8 @@ class PreliminaryJudgment:
     evidence_files: list[str]
     human_review_required: bool
     review_reason: str
+    manual_review_reason: str = ""
+    structured_details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

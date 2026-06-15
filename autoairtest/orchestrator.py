@@ -73,6 +73,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
 
         store.write_case_json(case.internal_id, "case.json", case)
         store.write_case_json(case.internal_id, "execution_plan.json", plan)
+        store.write_case_json(case.internal_id, "interpretation_rationales.json", plan.interpretation_rationales)
         store.write_case_json(case.internal_id, "action_results.json", action_results)
         store.write_case_json(case.internal_id, "verification_result.json", judgments)
         (case_dir / "logs.txt").write_text("Offline run completed without device execution.\n", encoding="utf-8")
