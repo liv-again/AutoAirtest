@@ -1,3 +1,9 @@
+"""离线验证器。
+
+验证器基于结构化界面证据给出初步判断。它优先处理可离线判断的文本顺序和文本存在性，
+并对行情数据正确性等业务判断保持人工复核边界。
+"""
+
 from __future__ import annotations
 
 from autoairtest.models import (
@@ -12,11 +18,16 @@ def verify_goals(
     goals: list[VerificationGoal],
     evidence: dict[str, object],
 ) -> list[PreliminaryJudgment]:
+    """逐一验证执行计划中的验证目标。"""
+
     return [_verify_goal(goal, evidence) for goal in goals]
 
 
 def _verify_goal(goal: VerificationGoal, evidence: dict[str, object]) -> PreliminaryJudgment:
+    """根据目标类别选择具体的离线验证策略。"""
+
     if goal.human_review_required:
+        # 人工复核目标不被自动判定为通过，避免把初判误写成最终结论。
         return PreliminaryJudgment(
             goal_id=goal.goal_id,
             preliminary_status=PreliminaryStatus.MANUAL_REQUIRED,
@@ -53,6 +64,8 @@ def _verify_order(
     visible_texts: list[str],
     evidence: dict[str, object],
 ) -> PreliminaryJudgment:
+    """验证期望文本序列是否按给定顺序出现在界面证据中。"""
+
     positions: list[int] = []
     for expected in goal.expected_entities:
         try:
@@ -85,6 +98,8 @@ def _verify_text_presence(
     visible_texts: list[str],
     evidence: dict[str, object],
 ) -> PreliminaryJudgment:
+    """验证页面跳转、弹框或普通文本目标是否具有文本证据支持。"""
+
     haystack = " ".join(visible_texts)
     expected = goal.expected_entities or [goal.claim]
     if any(item and item in haystack for item in expected):

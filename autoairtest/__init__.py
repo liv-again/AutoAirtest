@@ -1,3 +1,8 @@
-"""Offline core for AI-assisted mobile securities app test execution."""
+"""AutoAirtest 离线核心包。
+
+本包面向“自然语言测试用例到移动端测试执行证据链”的研究型原型。
+当前发布版本刻意限定为离线核心：保留 Airtest、Poco、OCR 与 LLM 的接口边界，
+但不要求这些运行时依赖在导入阶段即可用。
+"""
 
 __version__ = "0.1.0"

@@ -1,3 +1,9 @@
+"""HTML 报告生成器。
+
+报告用于把运行结果转化为可审计、可复核的人工阅读材料。当前实现采用静态 HTML，
+以降低部署成本并保证证据包可离线分发。
+"""
+
 from __future__ import annotations
 
 from html import escape
@@ -5,6 +11,8 @@ from pathlib import Path
 
 
 def write_html_report(run_dir: str | Path, case_summaries: list[dict[str, str]]) -> Path:
+    """根据用例摘要生成单页 HTML 报告。"""
+
     output_dir = Path(run_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = "\n".join(

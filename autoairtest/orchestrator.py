@@ -1,3 +1,9 @@
+"""离线运行编排器。
+
+编排器串联配置合并、用例加载、规则规划、离线执行占位、初步验证、证据写入和报告
+生成。它是当前 MVP 的主控流水线，但不直接调用 Airtest 或 Poco 原始 API。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -14,6 +20,11 @@ from .tools.evidence_store import EvidenceStore, safe_path_name
 
 
 def run_offline(config_overrides: dict[str, Any]) -> Path:
+    """执行一次离线测试运行并返回运行目录。
+
+    在当前实现中，设备动作被记录为“设备不可用跳过”，用于验证证据链和报告链路。
+    """
+
     overrides = dict(config_overrides)
     config = default_config()
     config_path = overrides.pop("config", "")
@@ -32,6 +43,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     for case in cases:
         case_dir = store.create_case_dir(case.internal_id)
         plan = planner.plan(case)
+        # 离线核心不执行真实点击，而是保留动作级证据结构，供后续设备适配器替换。
         action_results = [
             ActionResult(
                 action_id=action.action_id,
@@ -81,6 +93,8 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
 
 
 def _load_cases_or_dependency_case(config: dict[str, Any]):
+    """加载 Excel 用例；当缺少 openpyxl 时生成一条环境诊断用例。"""
+
     try:
         return load_test_cases(config["input"]["excel_path"], config["input"]["sheet_name"])
     except ExcelDependencyError as exc:
@@ -108,6 +122,8 @@ def _load_cases_or_dependency_case(config: dict[str, Any]):
 
 
 def _filter_cases(cases, case_filter: str):
+    """按用例名称、内部 ID、操作描述或预期结果进行朴素子串筛选。"""
+
     needle = str(case_filter or "").strip()
     if not needle:
         return cases
@@ -122,6 +138,8 @@ def _filter_cases(cases, case_filter: str):
 
 
 def _summary_for_status(status: str) -> str:
+    """把机器状态映射为面向人工复核的中文摘要。"""
+
     if status == "manual_required":
         return "存在需要人工复核的验证目标。"
     if status == "blocked":

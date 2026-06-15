@@ -1,3 +1,9 @@
+"""命令行接口。
+
+CLI 层负责把用户输入转换为配置覆盖项，并把具体执行委托给编排器。该层保持轻量，
+便于在后续接入其他运行时或服务接口时复用核心逻辑。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +14,8 @@ from .orchestrator import run_offline
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构造命令行解析器并声明所有公开参数。"""
+
     parser = argparse.ArgumentParser(prog="autoairtest")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -28,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """执行命令分发。
+
+    返回值遵循进程退出码约定：成功为 0，参数错误由 argparse 处理。
+    """
+
     parser = build_parser()
     args = parser.parse_args(argv)
 

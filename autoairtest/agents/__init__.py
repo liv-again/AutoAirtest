@@ -1,1 +1,5 @@
-"""Agent-like deterministic components for offline planning and verification."""
+"""离线 Agent 组件集合。
+
+这里的“Agent”并不表示必须调用大语言模型，而是指承担规划、验证等认知型职责的
+组件边界。离线核心阶段使用确定性规则实现，便于测试和复现实验结果。
+"""

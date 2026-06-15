@@ -1,3 +1,9 @@
+"""规则型执行计划生成器。
+
+本模块以确定性规则替代 LLM 规划，覆盖当前证券 App 测试样例中的高频语义模式。
+这种实现便于离线验证，也为后续接入 LLM Planner 提供稳定输出合同。
+"""
+
 from __future__ import annotations
 
 from autoairtest.models import (
@@ -9,13 +15,21 @@ from autoairtest.models import (
 )
 
 
+# 以下顺序常量来自需求文档中的业务预期，用于生成顺序类验证目标。
 DEFAULT_DOMESTIC_ORDER = ["上证指数", "深证成指", "北证50", "科创综指"]
 DETAIL_WITH_INDUSTRY_ORDER = ["行业板块", "上证指数", "深证成指", "科创综指", "北证50", "创业板指"]
 DETAIL_WITHOUT_INDUSTRY_ORDER = ["上证指数", "深证成指", "科创综指", "北证50", "创业板指"]
 
 
 class RuleBasedPlanner:
+    """把自然语言测试用例转换为结构化执行计划的规则型规划器。"""
+
     def plan(self, case: NaturalLanguageTestCase) -> ExecutionPlan:
+        """生成执行计划。
+
+        当前版本只做语义拆解，不生成 Python 脚本，也不承诺行情数据自动最终正确。
+        """
+
         return ExecutionPlan(
             case_id=case.internal_id,
             preconditions=[
@@ -31,6 +45,8 @@ class RuleBasedPlanner:
         )
 
     def _actions_for(self, operation: str) -> list[PlanAction]:
+        """从操作描述中抽取导航、点击或观察动作。"""
+
         targets: list[tuple[str, str, str]] = []
         if "行情" in operation:
             targets.append(("navigate", "进入行情页", "行情"))
@@ -64,6 +80,8 @@ class RuleBasedPlanner:
         ]
 
     def _goals_for(self, case: NaturalLanguageTestCase) -> list[VerificationGoal]:
+        """从预期结果和操作描述中抽取验证目标。"""
+
         text = f"{case.expected_result} {case.operation_description}"
         goals: list[VerificationGoal] = []
 
@@ -96,6 +114,7 @@ class RuleBasedPlanner:
                 )
             )
         if "数据" in text or "一致" in text:
+            # 行情数据正确性缺少外部 Oracle，MVP 中必须进入人工复核。
             goals.append(
                 self._goal(
                     "行情数据正确性或两端一致性需要人工复核",
@@ -105,6 +124,7 @@ class RuleBasedPlanner:
                 )
             )
         if "红涨绿跌黑平" in text or "颜色" in text:
+            # 颜色规则依赖视觉证据和业务口径，离线核心不作最终裁决。
             goals.append(
                 self._goal(
                     "颜色规则需要人工复核",
@@ -137,6 +157,8 @@ class RuleBasedPlanner:
         human_review_required: bool = False,
         review_reason: str = "",
     ) -> VerificationGoal:
+        """构造验证目标的内部辅助函数。"""
+
         return VerificationGoal(
             goal_id="v0",
             claim=claim,

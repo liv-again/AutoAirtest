@@ -1,3 +1,9 @@
+"""Excel 自然语言测试用例加载器。
+
+该模块把工作簿中的业务语言字段映射为系统内部的标准化测试用例对象。解析过程
+强调字段稳定性、空值规范化和重复用例名称的可追踪性。
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -25,10 +31,14 @@ REQUIRED_HEADERS = [
 
 
 class ExcelDependencyError(RuntimeError):
+    """当前环境缺少 Excel 解析依赖时抛出的显式错误。"""
+
     pass
 
 
 def normalize_cell(value: Any) -> str:
+    """把 Excel 单元格值规范化为字符串，空值统一表示为空串。"""
+
     if value is None:
         return ""
     return str(value).strip()
@@ -39,6 +49,8 @@ def build_case_from_row(
     row_number: int,
     duplicate_names: set[str],
 ) -> NaturalLanguageTestCase:
+    """由一行表格数据构造自然语言测试用例对象。"""
+
     normalized = {header: normalize_cell(row.get(header)) for header in REQUIRED_HEADERS}
     case_id = normalized["TC_用例名称"]
     internal_id = f"{case_id}__row_{row_number}" if case_id in duplicate_names else case_id
@@ -61,6 +73,8 @@ def build_case_from_row(
 
 
 def load_test_cases(excel_path: str | Path, sheet_name: str) -> list[NaturalLanguageTestCase]:
+    """从指定工作簿与 sheet 中读取所有非空测试用例。"""
+
     try:
         import openpyxl  # type: ignore
     except ModuleNotFoundError as exc:
@@ -90,5 +104,6 @@ def load_test_cases(excel_path: str | Path, sheet_name: str) -> list[NaturalLang
         rows.append((row_number, row))
         case_names.append(normalize_cell(row.get("TC_用例名称")))
 
+    # 重名用例保留原始名称，同时用行号构造内部 ID，保证证据目录唯一。
     duplicates = {name for name, count in Counter(case_names).items() if name and count > 1}
     return [build_case_from_row(row, row_number, duplicates) for row_number, row in rows]

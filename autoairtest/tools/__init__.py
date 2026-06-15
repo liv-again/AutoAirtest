@@ -1,1 +1,5 @@
-"""Tool adapter and evidence storage interfaces."""
+"""工具适配器与证据存储接口。
+
+该子包把外部执行环境封装为稳定接口，使上层流程不直接依赖 Airtest、Poco、
+OCR 或 LLM 的具体安装状态。此设计有利于后续替换为真实设备执行或 MCP 工具服务。
+"""
