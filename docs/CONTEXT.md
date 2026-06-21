@@ -80,6 +80,22 @@ _Avoid_: Manual fallback, visual spot check
 The final outcome of executing one Natural-Language Test Case, including pass/fail status, failure reason, and evidence references.
 _Avoid_: Test result cell, report row
 
+**Test Session**:
+A bounded test run that owns run-level metadata, configuration snapshot, append-only step records, crash records, reports, and one or more Run Results.
+_Avoid_: Single test case, output folder only
+
+**Crash Signature**:
+A normalized identifier for grouping crash or ANR evidence that appears to represent the same underlying failure, based on stable crash attributes rather than raw log text.
+_Avoid_: Full stack trace, root-cause proof
+
+**Reproduction Path**:
+The ordered execution steps recorded before a crash or blocking failure was observed. A Reproduction Path is evidence for replay and debugging, not proof that every step is strictly necessary.
+_Avoid_: Minimal repro, test plan
+
+**State Graph**:
+A representation of observed UI states and transitions between them, used to avoid loops, describe exploration coverage, or support later replay analysis.
+_Avoid_: Execution Plan, navigation map
+
 **Test Device**:
 The physical Android phone on which Natural-Language Test Cases are executed for the first product version. One test run targets one connected Test Device.
 _Avoid_: Emulator, iOS device
@@ -190,6 +206,12 @@ Evidence Recollection allows up to two attempts by default. The first attempt ma
 
 **Evidence Recollection Trace**:
 Every Evidence Recollection action that changes or refreshes Interface Evidence must be recorded in the Execution Trace with its trigger, related Verification Goal, Action Risk Level, before/after evidence references, and whether the evidence gap was resolved.
+
+**State Graph Boundary**:
+A State Graph may guide bounded exploration or diagnose repeated UI loops, but it must not override an Execution Plan for an Excel-derived Natural-Language Test Case. In MVP case execution, newly discovered unexplored elements are not a reason to click them automatically.
+
+**Crash Evidence Boundary**:
+A Crash Signature groups similar crash evidence for reporting and deduplication. It does not by itself prove the product root cause, and the original Reproduction Path must be preserved even if a later minimized path is added.
 
 ## Example Dialogue
 
