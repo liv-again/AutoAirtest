@@ -36,8 +36,11 @@ def default_config() -> dict[str, Any]:
             "action_timeout_seconds": 10,
             "page_stable_timeout_seconds": 8,
             "max_locator_attempts": 3,
+            "max_steps_per_case": 30,
             "screenshot_every_action": True,
             "save_full_ui_tree": False,
+            "enable_state_graph": False,
+            "correction_budget": {"low": 3, "medium": 1, "high": 0},
             "retry": {
                 "default_max_attempts": 2,
                 "default_interval_seconds": 1,
@@ -49,13 +52,46 @@ def default_config() -> dict[str, Any]:
         "verification": {
             "primary_evidence": "poco",
             "always_save_screenshot": True,
-            "llm_preliminary_judgment": False,
+            "llm_preliminary_judgment": True,
             "data_correctness_requires_human_review": True,
             "color_rule_requires_human_review": True,
             "min_confidence_for_auto_preliminary": 0.75,
+            "evidence_recollection": {
+                "max_attempts": 2,
+                "allow_visibility_adjustment_on_second_attempt": True,
+            },
+        },
+        "logs": {
+            "enable_capture": True,
+            "clear_before_action": True,
+            "default_window_seconds": 5,
+            "crash_patterns": [
+                "FATAL EXCEPTION",
+                "AndroidRuntime",
+                "ANR in ",
+                "*** *** *** *** *** ***",
+                "Tombstone written to",
+            ],
+        },
+        "evidence": {
+            "redact_sensitive_text": True,
+            "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
+            "redaction_placeholder": "[REDACTED]",
+            "screenshot_redaction": False,
         },
         "llm": {"model": "configured-by-env", "temperature": 0.1, "max_retries": 2},
-        "report": {"output_dir": "runs", "generate_html": True, "write_back_excel": False},
+        "report": {
+            "output_dir": "runs",
+            "session_name": "",
+            "generate_html": True,
+            "write_back_excel": False,
+        },
+        "doctor": {
+            "fail_on_missing_device": True,
+            "fail_on_missing_app_package": True,
+            "check_airtest": True,
+            "check_poco": True,
+        },
     }
 
 
