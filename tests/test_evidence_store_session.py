@@ -27,3 +27,42 @@ def test_evidence_store_appends_jsonl_records(tmp_path):
 
     lines = (store.root / "steps.jsonl").read_text(encoding="utf-8").splitlines()
     assert [json.loads(line)["index"] for line in lines] == [1, 2]
+
+
+def test_evidence_store_writes_case_artifacts_with_redaction(tmp_path):
+    store = EvidenceStore(tmp_path, "session")
+    evidence_config = {
+        "redact_sensitive_text": True,
+        "sensitive_keywords": ["资金账号"],
+        "redaction_placeholder": "[REDACTED]",
+    }
+
+    path = store.write_element_summary(
+        "TC_1",
+        "001_before_a1.json",
+        {"visible_texts": ["资金账号 123456", "行情"]},
+        evidence_config,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path.relative_to(store.root).as_posix() == "cases/TC_1/element_summaries/001_before_a1.json"
+    assert payload["visible_texts"] == ["[REDACTED]", "行情"]
+
+
+def test_evidence_store_writes_ocr_result(tmp_path):
+    store = EvidenceStore(tmp_path, "session")
+
+    path = store.write_ocr_result("TC_1", "001_before_a1.json", {"texts": [{"text": "行情"}]})
+
+    assert path.name == "001_before_a1.json"
+    assert path.parent.name == "ocr"
+    assert "行情" in path.read_text(encoding="utf-8")
+
+
+def test_evidence_store_writes_screenshot_bytes(tmp_path):
+    store = EvidenceStore(tmp_path, "session")
+
+    path = store.write_screenshot_bytes("TC_1", "001_after_a1.png", b"png-bytes")
+
+    assert path.parent.name == "screenshots"
+    assert path.read_bytes() == b"png-bytes"

@@ -83,6 +83,7 @@ def default_config() -> dict[str, Any]:
         "report": {
             "output_dir": "runs",
             "session_name": "",
+            "save_config": "",
             "generate_html": True,
             "write_back_excel": False,
         },

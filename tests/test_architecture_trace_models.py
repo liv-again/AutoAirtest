@@ -1,8 +1,13 @@
 from autoairtest.models import (
     ActionRiskLevel,
+    CrashSignature,
+    ExecutionPlan,
     ExecutionTrace,
     InterpretationRationale,
     PlanAmendment,
+    ReproductionPath,
+    StateGraphModel,
+    TestSession,
     dataclass_to_dict,
 )
 
@@ -47,3 +52,65 @@ def test_architecture_trace_models_serialize_to_json_friendly_dicts():
     assert result["rationale"]["normalized_meaning"] == "我的自选"
     assert result["trace"]["action_risk_level"] == "low"
     assert result["amendment"]["resolved_target"] == "我的自选"
+
+
+def test_crash_signature_serializes_stable_contract():
+    signature = CrashSignature(
+        signature_id="abc123",
+        kind="java",
+        exception_class="java.lang.IllegalStateException",
+        top_frames_normalized=["com.example.Main.onCreate"],
+        process="com.example.app",
+        source="logcat",
+        first_seen_step=2,
+    )
+
+    assert dataclass_to_dict(signature)["first_seen_step"] == 2
+
+
+def test_execution_plan_has_understanding_and_manual_review_notes():
+    plan = ExecutionPlan(
+        case_id="TC_1",
+        understanding="进入行情页并检查国内指数顺序",
+        preconditions=[],
+        actions=[],
+        verification_goals=[],
+        manual_review_notes=["Rule-based offline plan; no Python code generated."],
+    )
+
+    assert plan.understanding.startswith("进入行情页")
+    assert plan.manual_review_notes == ["Rule-based offline plan; no Python code generated."]
+
+
+def test_test_session_contract_serializes():
+    session = TestSession(
+        session_id="20260621-001",
+        workflow="excel_case_run",
+        started_at="2026-06-21T00:00:00",
+        finished_at="",
+        app_package="com.example",
+        adb_serial="ABC123",
+        config_snapshot="config.resolved.json",
+        case_count=7,
+        status="running",
+    )
+
+    assert dataclass_to_dict(session)["case_count"] == 7
+    assert dataclass_to_dict(session)["excel_result_copy"] == ""
+
+
+def test_reproduction_path_and_state_graph_model_serialize():
+    reproduction = ReproductionPath(
+        crash_id="c1",
+        case_id="TC_1",
+        original_repro_path=[1, 2, 3],
+        minimized_repro_path=[1, 3],
+        minimized_confidence=0.75,
+    )
+    graph = StateGraphModel(
+        pages={"p1": {"summary": "行情"}},
+        edges=[{"from": "p1", "action": "a1", "to": "p2", "case_id": "TC_1"}],
+    )
+
+    assert dataclass_to_dict(reproduction)["minimized_repro_path"] == [1, 3]
+    assert dataclass_to_dict(graph)["pages"]["p1"]["summary"] == "行情"

@@ -78,8 +78,57 @@ class EvidenceStore:
             handle.write(json.dumps(dataclass_to_dict(payload), ensure_ascii=False) + "\n")
         return output
 
+    def write_element_summary(
+        self,
+        case_id: str,
+        filename: str,
+        payload: Any,
+        evidence_config: dict[str, Any],
+    ) -> Path:
+        """写入用例级控件树摘要，并按证据配置脱敏。"""
+
+        output = self.create_case_dir(case_id) / "element_summaries" / filename
+        _write_json(output, _redact_sensitive_text(payload, evidence_config))
+        return output
+
+    def write_ocr_result(self, case_id: str, filename: str, payload: Any) -> Path:
+        """写入用例级 OCR 识别结果。"""
+
+        output = self.create_case_dir(case_id) / "ocr" / filename
+        _write_json(output, payload)
+        return output
+
+    def write_screenshot_bytes(self, case_id: str, filename: str, content: bytes) -> Path:
+        """写入用例级截图二进制内容。"""
+
+        output = self.create_case_dir(case_id) / "screenshots" / filename
+        output.write_bytes(content)
+        return output
+
 
 def safe_path_name(value: str) -> str:
     """把任意用例标识转换为适合文件系统路径的名称。"""
 
     return "".join(ch if ch not in '<>:"/\\|?*' else "_" for ch in value).strip() or "case"
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(dataclass_to_dict(payload), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _redact_sensitive_text(value: Any, evidence_config: dict[str, Any]) -> Any:
+    if not evidence_config.get("redact_sensitive_text", True):
+        return value
+    keywords = [str(item) for item in evidence_config.get("sensitive_keywords", []) if str(item)]
+    placeholder = str(evidence_config.get("redaction_placeholder", "[REDACTED]"))
+    if isinstance(value, dict):
+        return {key: _redact_sensitive_text(item, evidence_config) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive_text(item, evidence_config) for item in value]
+    if isinstance(value, str) and any(keyword in value for keyword in keywords):
+        return placeholder
+    return value

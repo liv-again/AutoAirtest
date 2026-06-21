@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ from autoairtest.models import (
 from autoairtest.tools.airtest_adapter import AirtestAdapter
 from autoairtest.tools.ocr_adapter import OCRAdapter
 from autoairtest.tools.poco_adapter import PocoAdapter
+from .locator import Locator, ocr_match, valid_bounds, write_ocr_result
+from .risk_policy import RiskPolicy
 from .stability import PageStabilityWaiter
 
 
@@ -39,6 +42,7 @@ class DeviceWorkflow:
         retry_config: dict[str, Any] | None = None,
         app_config: dict[str, Any] | None = None,
         evidence_config: dict[str, Any] | None = None,
+        log_collector: Any | None = None,
     ) -> None:
         self.airtest = airtest or AirtestAdapter()
         self.poco = poco or PocoAdapter()
@@ -53,6 +57,7 @@ class DeviceWorkflow:
             "poco_dump_backoff": "fixed",
         } | (retry_config or {})
         self.app_config = app_config or {}
+        self.log_collector = log_collector
         self.evidence_config = {
             "redact_sensitive_text": True,
             "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
@@ -77,6 +82,7 @@ class DeviceWorkflow:
 
         for index, action in enumerate(plan.actions, start=1):
             action_result, trace, amendment = self._execute_action(index, action, root)
+            action_result = self._check_action_crashes(index, action_result, root)
             results.append(action_result)
             traces.append(trace)
             if amendment:
@@ -304,14 +310,21 @@ class DeviceWorkflow:
             response = self.airtest.keyevent(key) | {"source": "airtest_keyevent"}
             return response, key, None, None
         if action.intent in {"tap", "click"} or action.preferred_locator.startswith("poco"):
-            response = self.poco.click(action.target)
+            locator = Locator(self.poco, self.ocr, self.airtest)
+            location = locator.locate_and_act(action.target, str(root / before_screenshot), allow_ocr=False)
+            response = location["response"]
             if response.get("status") == "success":
                 return response, action.target, None, None
             alias = _navigation_alias(action.target, before_dump)
             if alias and self._correction_budget_for(action) <= 0:
                 return response, action.target, None, None
             if alias:
-                alias_response = self.poco.click(alias["resolved_target"])
+                alias_location = locator.locate_and_act(
+                    alias["resolved_target"],
+                    str(root / before_screenshot),
+                    allow_ocr=False,
+                )
+                alias_response = alias_location["response"]
                 if alias_response.get("status") == "success":
                     correction_step = {
                         "type": "navigation_alias",
@@ -332,16 +345,16 @@ class DeviceWorkflow:
                     return alias_response, alias["resolved_target"], correction_step, amendment
             if self._correction_budget_for(action) <= 0:
                 return response, action.target, None, None
-            ocr_response = self._ocr_fallback(action, before_screenshot, index, root)
-            if ocr_response.get("status") == "success":
-                correction_step = {
-                    "type": "ocr_fallback",
-                    "attempt": 1,
-                    "target": action.target,
-                    "touch_point": list(ocr_response["target"]),
-                    "risk_level": action.action_risk_level.value,
-                }
-                return ocr_response, action.target, correction_step, None
+            fallback = self._locator_fallback(action, before_dump, before_screenshot, index, root)
+            fallback_response = fallback["response"]
+            if fallback_response.get("status") == "success":
+                correction_step = fallback["correction_step"]
+                if correction_step:
+                    correction_step = correction_step | {
+                        "attempt": 1,
+                        "risk_level": action.action_risk_level.value,
+                    }
+                return fallback_response, action.target, correction_step, None
         response = self.airtest.touch(action.target)
         return response, action.target, None, None
 
@@ -453,14 +466,13 @@ class DeviceWorkflow:
                 "source": "ocr",
                 "query": action.target,
             }, None
-        response = self._ocr_fallback(action, before_screenshot, index, root)
+        fallback = self._locator_fallback(action, {}, before_screenshot, index, root, use_dump_bounds=False)
+        response = fallback["response"]
         if response.get("status") != "success":
             return response, None
-        return response, {
-            "type": "ocr_fallback",
+        correction_step = fallback["correction_step"] or {}
+        return response, correction_step | {
             "attempt": 1,
-            "target": action.target,
-            "touch_point": list(response["target"]),
             "risk_level": action.action_risk_level.value,
             "reason": "poco_dump_unavailable",
         }
@@ -469,7 +481,7 @@ class DeviceWorkflow:
         return PageStabilityWaiter(sampler=lambda: _dump_signature(self.poco.dump()))
 
     def _correction_budget_for(self, action: PlanAction) -> int:
-        return int(self.correction_budget.get(action.action_risk_level.value, 0) or 0)
+        return RiskPolicy(self.correction_budget).correction_budget(action.action_risk_level)
 
     def _default_max_attempts(self) -> int:
         return max(1, int(self.retry_config.get("default_max_attempts", 1) or 1))
@@ -528,24 +540,72 @@ class DeviceWorkflow:
         _write_json(path, _redact_sensitive_text(payload, self.evidence_config))
 
     def _ocr_fallback(self, action: PlanAction, before_screenshot: str, index: int, root: Path) -> dict[str, Any]:
+        return self._locator_fallback(action, {}, before_screenshot, index, root, use_dump_bounds=False)["response"]
+
+    def _locator_fallback(
+        self,
+        action: PlanAction,
+        before_dump: dict[str, Any],
+        before_screenshot: str,
+        index: int,
+        root: Path,
+        use_dump_bounds: bool = True,
+    ) -> dict[str, Any]:
         ocr_path = f"ocr/{index:03d}_before_{action.action_id}.json"
-        ocr_result = self.ocr.recognize(str(root / before_screenshot))
-        _write_json(root / ocr_path, ocr_result)
-        match = _ocr_match(action.target, ocr_result)
-        if not match:
-            return {"status": "unavailable", "reason": "ocr target not found", "source": "ocr", "query": action.target}
-        touch_point = _bounds_center(match["bounds"])
-        response = self.airtest.touch(touch_point)
-        if response.get("status") != "success":
-            return response | {"source": "ocr", "query": action.target, "target": touch_point}
-        return {
-            "status": "success",
-            "source": "ocr",
-            "query": action.target,
-            "target": touch_point,
-            "match": match,
-            "ocr_evidence": ocr_path,
+        locator = Locator(self.poco, self.ocr, self.airtest)
+        if use_dump_bounds:
+            result = locator.locate_from_dump_and_screenshot(
+                action.target,
+                before_dump,
+                str(root / before_screenshot),
+                ocr_evidence_path=ocr_path,
+            )
+        else:
+            result = locator.locate_with_ocr(
+                action.target,
+                str(root / before_screenshot),
+                ocr_evidence_path=ocr_path,
+            )
+        ocr_result = result.get("ocr_result")
+        if isinstance(ocr_result, dict):
+            write_ocr_result(root / ocr_path, ocr_result)
+        response = result["response"]
+        if result.get("ocr_evidence") and response.get("status") == "success":
+            response = response | {"ocr_evidence": result["ocr_evidence"]}
+        return result | {"response": response}
+
+    def _check_action_crashes(self, index: int, action_result: ActionResult, root: Path) -> ActionResult:
+        if self.log_collector is None:
+            return action_result
+        crash_check = self.log_collector.get_recent_crashes(
+            package=str(self.app_config.get("package", "")),
+            lines=300,
+        )
+        crashes = crash_check.get("crashes", [])
+        if not crashes:
+            return action_result
+
+        crash_record = {
+            "index": index,
+            "action_id": action_result.action_id,
+            "status": crash_check.get("status", ""),
+            "crashes": crashes,
         }
+        crash_path = root / "action_crashes.json"
+        existing: list[dict[str, Any]] = []
+        if crash_path.exists():
+            payload = json.loads(crash_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                existing = [item for item in payload if isinstance(item, dict)]
+        existing.append(crash_record)
+        _write_json(crash_path, existing)
+
+        signature_ids = [str(crash.get("signature_id", "")) for crash in crashes if isinstance(crash, dict)]
+        return replace(
+            action_result,
+            status=ActionStatus.BLOCKED,
+            notes=[*action_result.notes, f"crash_detected: {', '.join(signature_ids)}"],
+        )
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -674,27 +734,11 @@ def _detect_login_page(dump: dict[str, Any]) -> list[str]:
 
 
 def _ocr_match(target: str, ocr_result: dict[str, Any]) -> dict[str, Any] | None:
-    texts = ocr_result.get("texts", [])
-    if not isinstance(texts, list):
-        return None
-    for item in texts:
-        if not isinstance(item, dict):
-            continue
-        text = str(item.get("text", ""))
-        bounds = item.get("bounds")
-        if target and target in text and _valid_bounds(bounds):
-            return {"text": text, "bounds": bounds}
-    return None
+    return ocr_match(target, ocr_result)
 
 
 def _valid_bounds(bounds: Any) -> bool:
-    return (
-        isinstance(bounds, list)
-        and len(bounds) == 4
-        and all(isinstance(item, int | float) for item in bounds)
-        and bounds[2] > bounds[0]
-        and bounds[3] > bounds[1]
-    )
+    return valid_bounds(bounds)
 
 
 def _bounds_center(bounds: list[int | float]) -> tuple[int, int]:

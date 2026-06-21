@@ -102,6 +102,7 @@ class FakeOCR:
 def _plan():
     return ExecutionPlan(
         case_id="TC_device",
+        understanding="点击更多并验证进入国内指数列表页",
         preconditions=[],
         actions=[
             PlanAction(
@@ -124,7 +125,7 @@ def _plan():
                 review_reason="",
             )
         ],
-        notes=[],
+        manual_review_notes=[],
     )
 
 
@@ -290,10 +291,11 @@ def test_device_workflow_blocks_high_risk_action_without_touching_device(tmp_pat
     )
     plan = ExecutionPlan(
         case_id=plan.case_id,
+        understanding=plan.understanding,
         preconditions=plan.preconditions,
         actions=[high_risk_action],
         verification_goals=plan.verification_goals,
-        notes=plan.notes,
+        manual_review_notes=plan.manual_review_notes,
     )
     workflow = DeviceWorkflow(airtest=airtest, poco=poco)
 
@@ -339,10 +341,11 @@ def test_device_workflow_writes_plan_amendment_for_navigation_alias(tmp_path):
     )
     plan = ExecutionPlan(
         case_id=plan.case_id,
+        understanding=plan.understanding,
         preconditions=plan.preconditions,
         actions=[alias_action],
         verification_goals=plan.verification_goals,
-        notes=plan.notes,
+        manual_review_notes=plan.manual_review_notes,
     )
 
     results = DeviceWorkflow(airtest=airtest, poco=poco).execute_plan(plan, tmp_path)
@@ -383,10 +386,11 @@ def test_device_workflow_blocks_alias_correction_when_low_budget_is_zero(tmp_pat
     )
     plan = ExecutionPlan(
         case_id=plan.case_id,
+        understanding=plan.understanding,
         preconditions=plan.preconditions,
         actions=[alias_action],
         verification_goals=plan.verification_goals,
-        notes=plan.notes,
+        manual_review_notes=plan.manual_review_notes,
     )
 
     results = DeviceWorkflow(
@@ -470,6 +474,7 @@ def test_device_workflow_dispatches_swipe_text_and_back_without_click_retry(tmp_
     )
     plan = ExecutionPlan(
         case_id="TC_airtest_actions",
+        understanding="执行 Airtest 滑动、输入和返回动作",
         preconditions=[],
         actions=[
             PlanAction(
@@ -498,7 +503,7 @@ def test_device_workflow_dispatches_swipe_text_and_back_without_click_retry(tmp_
             ),
         ],
         verification_goals=[],
-        notes=[],
+        manual_review_notes=[],
     )
 
     results = DeviceWorkflow(
@@ -531,6 +536,7 @@ def test_device_workflow_observe_action_collects_evidence_without_touching_devic
     )
     plan = ExecutionPlan(
         case_id="TC_observe",
+        understanding="观察当前页面并采集证据",
         preconditions=[],
         actions=[
             PlanAction(
@@ -543,7 +549,7 @@ def test_device_workflow_observe_action_collects_evidence_without_touching_devic
             )
         ],
         verification_goals=[],
-        notes=[],
+        manual_review_notes=[],
     )
 
     results = DeviceWorkflow(
@@ -683,3 +689,54 @@ def test_device_workflow_degrades_to_ocr_when_poco_dump_keeps_failing(tmp_path):
     assert trace[0]["selected_element"]["response"]["source"] == "ocr"
     assert trace[0]["correction_step"]["type"] == "ocr_fallback"
     assert "poco_dump_unavailable" in trace[0]["execution_rationale"]
+
+
+def test_device_workflow_blocks_action_when_log_collector_finds_crash(tmp_path):
+    class FakeLogCollector:
+        def __init__(self):
+            self.calls = []
+
+        def get_recent_crashes(self, package="", lines=300):
+            self.calls.append({"package": package, "lines": lines})
+            return {
+                "status": "success",
+                "crash_count": 1,
+                "crashes": [
+                    {
+                        "signature_id": "crash1",
+                        "kind": "java",
+                        "exception_class": "java.lang.IllegalStateException",
+                        "top_frames_normalized": ["com.example.Main.onClick"],
+                        "process": package,
+                        "source": "logcat",
+                        "first_seen_step": 1,
+                    }
+                ],
+            }
+
+    log_collector = FakeLogCollector()
+    workflow = DeviceWorkflow(
+        airtest=FakeAirtest(),
+        poco=FakePoco(
+            dump_results=[
+                {"status": "success", "visible_texts": ["行情", "更多"], "elements": [{"text": "更多"}]},
+                {"status": "success", "visible_texts": ["国内指数"], "elements": [{"text": "国内指数"}]},
+            ]
+        ),
+        log_collector=log_collector,
+        app_config={"package": "com.example.securities"},
+        stability_waiter_factory=lambda: type(
+            "FakeWaiter",
+            (),
+            {"wait": lambda self: {"stable": True, "attempts": 1}},
+        )(),
+    )
+
+    results = workflow.execute_plan(_plan(), tmp_path)
+
+    assert results[0].status == ActionStatus.BLOCKED
+    assert "crash_detected: crash1" in results[0].notes
+    assert log_collector.calls == [{"package": "com.example.securities", "lines": 300}]
+    crashes = json.loads((tmp_path / "action_crashes.json").read_text(encoding="utf-8"))
+    assert crashes[0]["action_id"] == "a1"
+    assert crashes[0]["crashes"][0]["signature_id"] == "crash1"

@@ -19,12 +19,14 @@ from .agents.verifier import verify_goals
 from .config import default_config, load_config, merge_config
 from .excel_loader import ExcelDependencyError, build_case_from_row, load_test_cases
 from .excel_writer import write_results_copy
-from .models import ActionResult, ActionStatus, RunResult, dataclass_to_dict, summarize_run_status
+from .models import ActionResult, ActionStatus, RunResult, TestSession, dataclass_to_dict, summarize_run_status
 from .report.html_report import write_html_report
 from .tools.evidence_store import EvidenceStore, safe_path_name
 from .tools.llm_client import LLMClient
 from .tools.log_collector import LogCollector
+from .planning.planning_agent import PlanningAgent
 from .verification.evidence_recollection import EvidenceRecollector
+from .verification.verification_agent import VerificationAgent
 
 
 def run_offline(config_overrides: dict[str, Any]) -> Path:
@@ -39,13 +41,14 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     if config_path:
         config = merge_config(config, load_config(config_path))
     config = merge_config(config, overrides)
+    _save_resolved_config_if_requested(config)
 
     started_at = datetime.now().isoformat(timespec="seconds")
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     session_suffix = safe_path_name(str(config["report"].get("session_name", "")))
     session_id = f"{timestamp}_{session_suffix}" if session_suffix else timestamp
     store = EvidenceStore(config["report"]["output_dir"], session_id)
-    planner = RuleBasedPlanner()
+    planner = PlanningAgent(llm_client=None, rule_based_planner=RuleBasedPlanner())
 
     cases = _filter_cases(_load_cases_or_dependency_case(config), config["input"].get("case_filter", ""))
     cases = _apply_case_param_overrides(cases, config["input"].get("case_params", {}))
@@ -55,17 +58,17 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     state_graph = StateGraph()
     store.write_run_json("state_graph.json", state_graph.to_dict())
     store.write_session_meta(
-        {
-            "session_id": session_id,
-            "workflow": "excel_case_run",
-            "started_at": started_at,
-            "finished_at": "",
-            "app_package": config["app"].get("package", ""),
-            "adb_serial": config["device"].get("adb_serial", ""),
-            "config_snapshot": "config.resolved.json",
-            "case_count": len(cases),
-            "status": "running",
-        }
+        TestSession(
+            session_id=session_id,
+            workflow="excel_case_run",
+            started_at=started_at,
+            finished_at="",
+            app_package=config["app"].get("package", ""),
+            adb_serial=config["device"].get("adb_serial", ""),
+            config_snapshot="config.resolved.json",
+            case_count=len(cases),
+            status="running",
+        )
     )
     run_results: list[RunResult] = []
     case_summaries: list[dict[str, str]] = []
@@ -76,6 +79,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
 
     for case in cases:
         case_dir = store.create_case_dir(case.internal_id)
+        case_crash_refs: list[dict[str, Any]] = []
         plan = planner.plan(case)
         max_steps = int(config.get("execution", {}).get("max_steps_per_case", 0) or 0)
         if max_steps > 0 and len(plan.actions) > max_steps:
@@ -130,16 +134,25 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
                     continue
                 seen_crash_signatures.add(crash_key)
                 crash_index += 1
+                crash_id = f"c{crash_index}"
                 store.append_jsonl(
                     "crashes.jsonl",
                     {
-                        "crash_id": f"c{crash_index}",
+                        "crash_id": crash_id,
                         "case_id": case.internal_id,
                         "step_index": step_index,
                         "action_id": action_result.action_id,
                         "signature": crash,
                         "original_repro_path": list(range(1, step_index + 1)),
                     },
+                )
+                case_crash_refs.append(
+                    {
+                        "crash_id": crash_id,
+                        "step_index": step_index,
+                        "action_id": action_result.action_id,
+                        "signature_id": _crash_signature_id(crash),
+                    }
                 )
             store.append_jsonl(
                 "steps.jsonl",
@@ -166,8 +179,19 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
                 config=config.get("llm", {}),
                 evidence_config=config.get("evidence", {}),
             )
-        judgments = verify_goals(plan.verification_goals, verification_evidence)
-        evidence_recollection_trace = _collect_evidence_for_verification_gaps(judgments, case_dir, config)
+        max_recollection_attempts = _max_evidence_recollection_attempts(config)
+        recollector = (
+            EvidenceRecollector(max_attempts=max_recollection_attempts)
+            if max_recollection_attempts > 0
+            else None
+        )
+        verification_result = VerificationAgent(
+            recollector=recollector,
+            max_recollection_attempts=max_recollection_attempts,
+            initial_judgment_provider=verify_goals,
+        ).verify(plan.verification_goals, verification_evidence, case_dir)
+        judgments = verification_result.judgments
+        evidence_recollection_trace = verification_result.recollection_trace
         status = summarize_run_status(action_results, judgments)
         run_result = RunResult(
             case_id=case.internal_id,
@@ -185,6 +209,8 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
         store.write_case_json(case.internal_id, "interpretation_rationales.json", plan.interpretation_rationales)
         store.write_case_json(case.internal_id, "action_results.json", action_results)
         store.write_case_json(case.internal_id, "verification_result.json", judgments)
+        if case_crash_refs:
+            store.write_case_json(case.internal_id, "crash_refs.json", case_crash_refs)
         if evidence_recollection_trace:
             store.write_case_json(case.internal_id, "evidence_recollection_trace.json", evidence_recollection_trace)
             _append_evidence_recollection_execution_trace(case_dir, evidence_recollection_trace)
@@ -224,18 +250,18 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
         },
     )
     store.write_session_meta(
-        {
-            "session_id": session_id,
-            "workflow": "excel_case_run",
-            "started_at": started_at,
-            "finished_at": datetime.now().isoformat(timespec="seconds"),
-            "app_package": config["app"].get("package", ""),
-            "adb_serial": config["device"].get("adb_serial", ""),
-            "config_snapshot": "config.resolved.json",
-            "case_count": len(cases),
-            "excel_result_copy": excel_result_copy,
-            "status": "completed",
-        }
+        TestSession(
+            session_id=session_id,
+            workflow="excel_case_run",
+            started_at=started_at,
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+            app_package=config["app"].get("package", ""),
+            adb_serial=config["device"].get("adb_serial", ""),
+            config_snapshot="config.resolved.json",
+            case_count=len(cases),
+            status="completed",
+            excel_result_copy=excel_result_copy,
+        )
     )
     if config["report"].get("generate_html", True):
         write_html_report(store.root, case_summaries)
@@ -269,6 +295,15 @@ def _load_cases_or_dependency_case(config: dict[str, Any]):
                 duplicate_names=set(),
             )
         ]
+
+
+def _save_resolved_config_if_requested(config: dict[str, Any]) -> None:
+    output_path = str(config.get("report", {}).get("save_config", "")).strip()
+    if not output_path:
+        return
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _filter_cases(cases, case_filter: str):
@@ -315,8 +350,7 @@ def _manual_review_reason(judgments) -> str:
 def _collect_evidence_for_verification_gaps(judgments, case_dir: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
     """对验证证据不足的目标执行受限补采，并返回可审计轨迹。"""
 
-    recollection_config = config.get("verification", {}).get("evidence_recollection", {})
-    max_attempts = int(recollection_config.get("max_attempts", 0) or 0)
+    max_attempts = _max_evidence_recollection_attempts(config)
     if max_attempts <= 0:
         return []
 
@@ -335,6 +369,11 @@ def _collect_evidence_for_verification_gaps(judgments, case_dir: Path, config: d
         for attempt in range(1, max_attempts + 1):
             trace.append(recollector.recollect(judgment.goal_id, case_dir, attempt))
     return trace
+
+
+def _max_evidence_recollection_attempts(config: dict[str, Any]) -> int:
+    recollection_config = config.get("verification", {}).get("evidence_recollection", {})
+    return int(recollection_config.get("max_attempts", 0) or 0)
 
 
 def _apply_case_param_overrides(cases, case_params: dict[str, Any]) -> list[Any]:
@@ -479,3 +518,9 @@ def _crash_signature_key(crash: Any) -> str:
             return signature_id
         return json.dumps(crash, ensure_ascii=False, sort_keys=True)
     return str(crash)
+
+
+def _crash_signature_id(crash: Any) -> str:
+    if isinstance(crash, dict):
+        return str(crash.get("signature_id", ""))
+    return ""

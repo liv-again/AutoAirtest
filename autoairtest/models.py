@@ -136,10 +136,11 @@ class ExecutionPlan:
     """自然语言测试用例经规划器转换后的结构化执行计划。"""
 
     case_id: str
+    understanding: str
     preconditions: list[dict[str, str]]
     actions: list[PlanAction]
     verification_goals: list[VerificationGoal]
-    notes: list[str]
+    manual_review_notes: list[str]
     interpretation_rationales: list[InterpretationRationale] = field(default_factory=list)
 
 
@@ -188,6 +189,54 @@ class PlanAmendment:
     reason: str
     matched_skill_rules: list[str]
     evidence_files: list[str]
+
+
+@dataclass(frozen=True)
+class CrashSignature:
+    """崩溃、ANR 或 native crash 的稳定归一签名。"""
+
+    signature_id: str
+    kind: str
+    exception_class: str
+    top_frames_normalized: list[str]
+    process: str
+    source: str
+    first_seen_step: int = 0
+
+
+@dataclass(frozen=True)
+class TestSession:
+    """单次运行的顶层会话元数据。"""
+
+    session_id: str
+    workflow: str
+    started_at: str
+    finished_at: str
+    app_package: str
+    adb_serial: str
+    config_snapshot: str
+    case_count: int
+    status: str
+    excel_result_copy: str = ""
+
+
+@dataclass(frozen=True)
+class ReproductionPath:
+    """崩溃复现路径及其最小化结果。"""
+
+    crash_id: str
+    case_id: str
+    original_repro_path: list[int]
+    minimized_repro_path: list[int]
+    minimized_confidence: float
+
+
+@dataclass(frozen=True)
+class StateGraphModel:
+    """运行级页面状态图的可序列化输出模型。"""
+
+    pages: dict[str, Any]
+    edges: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)

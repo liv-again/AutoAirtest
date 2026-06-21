@@ -6,9 +6,10 @@ AutoAirtest 是一个面向移动端证券应用测试场景的离线核心原�
 
 ## 研究定位
 
-本项目当前版本聚焦于“离线可复现核心”，并不声称已经完成真实 Android 设备上的闭环
-自动执行。系统保留 Airtest、Poco、OCR 与大语言模型的适配器边界，但在依赖缺失时
-以显式的 `unavailable` 状态降级，保证核心流程仍可运行和测试。
+本项目当前版本聚焦于“离线可复现核心”，并保留受限的真机执行入口。设备模式只有在
+Airtest/Poco 适配器、ADB 连接和 doctor 检查均满足要求时才适合启用；依赖缺失时系统会
+以显式的 `unavailable`、`blocked` 或 `skipped_device_unavailable` 状态降级，避免静默
+报告成功。
 
 该设计适合用于以下研究或工程前置工作：
 
@@ -23,8 +24,8 @@ AutoAirtest 是一个面向移动端证券应用测试场景的离线核心原�
 系统采用线性主控流水线：
 
 ```text
-配置合并 -> Excel 用例读取 -> 规则型规划 -> 离线执行占位
-        -> 初步验证 -> 证据落盘 -> HTML 报告生成
+配置合并 -> Excel 用例读取 -> Planning Agent -> 离线/设备执行
+        -> Verification Agent -> 证据落盘 -> HTML 报告生成
 ```
 
 主要模块如下：
@@ -34,8 +35,9 @@ AutoAirtest 是一个面向移动端证券应用测试场景的离线核心原�
 - `autoairtest.config`：提供默认配置、JSON/YAML 配置读取和递归覆盖合并。
 - `autoairtest.excel_loader`：读取 Excel 测试用例，并进行空值规范化与重复用例 ID
   处理。
-- `autoairtest.agents.planner`：基于确定性规则生成执行动作和验证目标。
-- `autoairtest.agents.verifier`：基于结构化界面证据进行顺序、文本和人工复核判断。
+- `autoairtest.planning`：提供 Planning Agent、规则型规划器和技能注册表。
+- `autoairtest.execution`：提供设备工作流、定位策略、风险策略和状态图能力。
+- `autoairtest.verification`：提供 Rule Engine、Verification Agent 和受限证据补采。
 - `autoairtest.tools`：定义 Airtest、Poco、OCR、LLM 与证据存储等工具边界。
 - `autoairtest.orchestrator`：串联完整离线运行流程。
 - `autoairtest.report`：生成可供人工审阅的 HTML 报告。
@@ -68,7 +70,20 @@ python -m autoairtest run `
   --excel docs/test-cases.xlsx `
   --sheet 需求测试报告 `
   --case-filter 国内指数 `
-  --output-dir runs
+  --output-dir runs `
+  --save-config runs/resolved.json
+```
+
+执行设备模式前建议先运行环境检查：
+
+```powershell
+python -m autoairtest doctor --output-dir runs\doctor
+python -m autoairtest run `
+  --excel docs/test-cases.xlsx `
+  --sheet 需求测试报告 `
+  --output-dir runs `
+  --execution-mode device `
+  --disable-log-capture
 ```
 
 常用参数：
@@ -80,6 +95,11 @@ python -m autoairtest run `
 - `--app-package`：预留的被测 Android 应用包名。
 - `--adb-serial`：预留的 Android 真机序列号。
 - `--output-dir`：指定证据和报告输出目录。
+- `--execution-mode device`：启用真机执行模式；请先通过 `doctor` 检查设备和适配器。
+- `--save-config`：把合并后的运行配置保存为 UTF-8 JSON，便于复现。
+- `--disable-log-capture`：关闭动作后 logcat 崩溃采集。
+- `--enable-state-graph`：根据动作前后 UI 摘要生成运行级页面状态图。
+- `--write-back-excel`：在输出目录写出带结果列的 Excel 副本。
 
 ## 证据输出
 
@@ -88,6 +108,11 @@ python -m autoairtest run `
 ```text
 runs/
 └── <timestamp>/
+    ├── session_meta.json
+    ├── config.resolved.json
+    ├── steps.jsonl
+    ├── crashes.jsonl
+    ├── state_graph.json
     ├── run_summary.json
     ├── report.html
     └── cases/
@@ -96,6 +121,9 @@ runs/
             ├── execution_plan.json
             ├── action_results.json
             ├── verification_result.json
+            ├── execution_trace.json
+            ├── plan_amendments.json
+            ├── evidence_recollection_trace.json
             ├── logs.txt
             ├── screenshots/
             ├── element_summaries/
@@ -108,13 +136,11 @@ runs/
 
 当前版本仍有以下明确边界：
 
-- 不执行真实 Android 点击、滑动或输入。
-- 不验证真实 Poco 控件树。
-- 不执行 OCR 识别。
-- 不调用真实 LLM 服务。
-- 不进行 Excel 结果回写。
-- 不对截图做敏感区域遮盖。
-- 不包含测试用例文档、详细设计文档或测试代码。
+- 设备模式依赖本机 Airtest/Poco/ADB 环境；doctor 未通过时不应解释为真实执行成功。
+- OCR 与 LLM 是可选适配能力，取决于本地适配器和 provider 配置。
+- 行情数据正确性、颜色规则和跨端一致性仍需要人工复核或外部 Oracle。
+- 截图敏感区域遮盖仍取决于后续适配器实现；文本证据会按配置进行敏感词脱敏。
+- 发布包可能不包含真实业务 Excel；本地运行时需要提供对应用例文档。
 
 这些边界是有意保留的：离线核心优先保证数据模型、证据链和报告链路稳定，后续可在
 不破坏上层合同的情况下替换为真实设备执行器。

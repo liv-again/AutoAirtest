@@ -46,3 +46,34 @@ def test_log_collector_does_not_call_runner_when_disabled():
 
     assert result["status"] == "disabled"
     assert result["crash_count"] == 0
+
+
+def test_log_collector_clear_uses_logcat_clear():
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        return {"status": "success", "stdout": "", "stderr": ""}
+
+    collector = LogCollector(adb_path="adb", enabled=True, runner=fake_runner)
+
+    result = collector.clear()
+
+    assert result["status"] == "success"
+    assert calls == [["adb", "logcat", "-c"]]
+
+
+def test_log_collector_dump_recent_uses_line_window():
+    calls = []
+
+    def fake_runner(args):
+        calls.append(args)
+        return {"status": "success", "stdout": "recent logs", "stderr": ""}
+
+    collector = LogCollector(adb_path="adb", enabled=True, runner=fake_runner)
+
+    result = collector.dump_recent(lines=120)
+
+    assert result["status"] == "success"
+    assert result["stdout"] == "recent logs"
+    assert calls == [["adb", "logcat", "-d", "-t", "120"]]

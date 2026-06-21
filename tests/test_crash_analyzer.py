@@ -36,3 +36,29 @@ def test_extract_crash_signatures_returns_empty_for_unrelated_or_quiet_logs():
     quiet = "06-21 10:30:00.000 I ActivityTaskManager: Displayed com.other/.MainActivity"
 
     assert extract_crash_signatures(quiet, package="com.example.securities") == []
+
+
+def test_extract_anr_signature():
+    log = "06-21 10:30:00.000 E ActivityManager: ANR in com.example.securities\nReason: Input dispatching timed out"
+
+    crashes = extract_crash_signatures(log, package="com.example.securities")
+
+    assert crashes[0]["kind"] == "anr"
+    assert crashes[0]["process"] == "com.example.securities"
+    assert crashes[0]["exception_class"] == "ANR"
+
+
+def test_extract_native_crash_signature():
+    log = """
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 1234, tid: 1234, name: main  >>> com.example.securities <<<
+backtrace:
+      #00 pc 000000000001234 libfoo.so (nativeMethod+12)
+      #01 pc 000000000005678 libbar.so (otherMethod+4)
+"""
+
+    crashes = extract_crash_signatures(log, package="com.example.securities")
+
+    assert crashes[0]["kind"] == "native"
+    assert crashes[0]["process"] == "com.example.securities"
+    assert "libfoo.so" in crashes[0]["top_frames_normalized"][0]

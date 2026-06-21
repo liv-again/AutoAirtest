@@ -1,0 +1,18 @@
+domestic_index_order:
+  - 上证指数
+  - 深证成指
+  - 北证50
+  - 科创综指
+detail_with_industry_order:
+  - 行业板块
+  - 上证指数
+  - 深证成指
+  - 科创综指
+  - 北证50
+  - 创业板指
+detail_without_industry_order:
+  - 上证指数
+  - 深证成指
+  - 科创综指
+  - 北证50
+  - 创业板指

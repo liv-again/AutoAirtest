@@ -6,6 +6,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from autoairtest.models import StateGraphModel, dataclass_to_dict
+
 
 def page_fingerprint(elements: list[dict[str, Any]]) -> str:
     """根据稳定元素字段生成页面指纹。"""
@@ -55,7 +57,7 @@ class StateGraph:
         self.edges.append({"from": from_hash, "action": action, "to": to_hash, "case_id": case_id})
 
     def to_dict(self) -> dict[str, Any]:
-        return {"pages": self.pages, "edges": self.edges}
+        return dataclass_to_dict(StateGraphModel(pages=self.pages, edges=self.edges))
 
 
 def _element_token(element: dict[str, Any]) -> str:

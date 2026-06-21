@@ -1,0 +1,8 @@
+routes:
+  market_domestic_index:
+    - 行情
+    - 股指
+    - 国内指数
+  self_selected_top_index:
+    - 我的自选
+    - 顶部指数

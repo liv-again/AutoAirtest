@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--adb-serial", default="")
     run.add_argument("--output-dir", default="")
     run.add_argument("--session-name", default="")
+    run.add_argument("--save-config", default="")
     run.add_argument("--write-back-excel", action="store_true")
     run.add_argument("--execution-mode", choices=["offline", "device"], default="")
     run.add_argument("--max-steps-per-case", type=int, default=None)
@@ -111,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             "report": {
                 "output_dir": args.output_dir or "runs",
                 "session_name": args.session_name,
+                "save_config": args.save_config,
                 "write_back_excel": args.write_back_excel,
             },
         }

@@ -201,3 +201,114 @@ def test_html_report_groups_cases_by_manual_review_reason(tmp_path):
     assert "TC_data" in html
     assert "TC_gap" in html
     assert "TC_color" in html
+
+
+def test_html_report_includes_run_status_case_details_recollection_and_screenshot(tmp_path):
+    case_dir = tmp_path / "cases" / "TC_1"
+    screenshot_dir = case_dir / "screenshots"
+    screenshot_dir.mkdir(parents=True)
+    (screenshot_dir / "001_after_a1.png").write_bytes(b"fake-png")
+    (tmp_path / "session_meta.json").write_text(
+        json.dumps(
+            {
+                "session_id": "20260622-120000_detail",
+                "workflow": "excel_case_run",
+                "case_count": 1,
+                "status": "completed",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "crashes.jsonl").write_text("", encoding="utf-8")
+    (case_dir / "action_results.json").write_text(
+        json.dumps(
+            [
+                {
+                    "action_id": "a1",
+                    "status": "success",
+                    "locator_level": "poco_text",
+                    "target_element": {"text": "国内指数"},
+                    "before_screenshot": "",
+                    "after_screenshot": "screenshots/001_after_a1.png",
+                    "element_summary_before": "",
+                    "element_summary_after": "",
+                    "notes": [],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (case_dir / "verification_result.json").write_text(
+        json.dumps(
+            [
+                {
+                    "goal_id": "v1",
+                    "preliminary_status": "pass",
+                    "confidence": 0.82,
+                    "basis": "Observed order positions: [0, 1, 2]",
+                    "evidence_files": [],
+                    "human_review_required": False,
+                    "review_reason": "",
+                    "manual_review_reason": "",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (case_dir / "execution_trace.json").write_text(
+        json.dumps(
+            [
+                {
+                    "trace_id": "t1",
+                    "trace_type": "action",
+                    "action_id": "a1",
+                    "planned_target": "国内指数",
+                    "normalized_target": "国内指数",
+                    "action_risk_level": "low",
+                    "correction_step": None,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (case_dir / "evidence_recollection_trace.json").write_text(
+        json.dumps(
+            [
+                {
+                    "status": "collected",
+                    "goal_id": "v1",
+                    "attempt": 1,
+                    "action": "refresh_current_screen_evidence",
+                    "action_risk_level": "low",
+                    "screenshot": "screenshots/001_after_a1.png",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report_path = write_html_report(
+        tmp_path,
+        [
+            {
+                "case_id": "TC_1",
+                "run_status": "pass_preliminary",
+                "summary": "初步通过",
+                "evidence_dir": "cases/TC_1",
+                "manual_review_reason": "",
+            }
+        ],
+    )
+
+    html = report_path.read_text(encoding="utf-8")
+    assert "Run Status Summary" in html
+    assert "pass_preliminary" in html
+    assert "Action Results" in html
+    assert "Verification Results" in html
+    assert "Evidence Recollection" in html
+    assert '<img src="cases/TC_1/screenshots/001_after_a1.png"' in html
