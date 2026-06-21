@@ -53,6 +53,31 @@ class EvidenceStore:
         )
         return output
 
+    def write_session_meta(self, payload: Any) -> Path:
+        """写入 Test Session 元数据。"""
+
+        return self.write_run_json("session_meta.json", payload)
+
+    def write_config_snapshot(self, payload: Any) -> Path:
+        """写入本次运行合并后的配置快照。"""
+
+        return self.write_run_json("config.resolved.json", payload)
+
+    def initialize_jsonl(self, filename: str) -> Path:
+        """创建或清空 session 级 JSONL 文件。"""
+
+        output = self.root / filename
+        output.write_text("", encoding="utf-8")
+        return output
+
+    def append_jsonl(self, filename: str, payload: Any) -> Path:
+        """向 session 级 JSONL 文件追加一行 JSON。"""
+
+        output = self.root / filename
+        with output.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(dataclass_to_dict(payload), ensure_ascii=False) + "\n")
+        return output
+
 
 def safe_path_name(value: str) -> str:
     """把任意用例标识转换为适合文件系统路径的名称。"""
