@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import re
+
 from autoairtest.models import (
     ActionRiskLevel,
     ExecutionPlan,
@@ -71,6 +73,14 @@ class RuleBasedPlanner:
             targets.append(("tap", "点击自选顶部指数", "自选顶部指数", ["ir_self_selected_top_index"]))
         if "顶部指数" in operation and "自选顶部指数" not in operation:
             targets.append(("tap", "点击顶部指数", "顶部指数", ["ir_top_index"]))
+        swipe_direction = _extract_swipe_direction(operation)
+        if swipe_direction:
+            targets.append(("swipe", "滑动当前页面", swipe_direction, ["ir_swipe"]))
+        input_text = _extract_input_text(operation)
+        if input_text:
+            targets.append(("text", "输入文本", input_text, ["ir_text_input"]))
+        if "返回" in operation:
+            targets.append(("keyevent", "返回上一页", "BACK", ["ir_back"]))
         if not targets:
             targets.append(("observe", "观察当前页面", "当前页面", ["ir_current_page"]))
 
@@ -116,6 +126,9 @@ class RuleBasedPlanner:
             ("ir_bottom_index", "底部指数", "底部指数入口"),
             ("ir_self_selected_top_index", "自选顶部指数", "自选顶部指数"),
             ("ir_top_index", "顶部指数", "顶部指数"),
+            ("ir_swipe", "滑动", "滑动当前页面"),
+            ("ir_text_input", "输入", "输入文本"),
+            ("ir_back", "返回", "返回上一页"),
             ("ir_current_page", "当前页面", "当前页面"),
         ]:
             if original.replace("/沪深京", "") in operation or normalized in operation:
@@ -222,3 +235,20 @@ class RuleBasedPlanner:
             human_review_required=human_review_required,
             review_reason=review_reason,
         )
+
+
+def _extract_swipe_direction(operation: str) -> str:
+    if any(item in operation for item in ["向上滑动", "上滑"]):
+        return "up"
+    if any(item in operation for item in ["向下滑动", "下滑"]):
+        return "down"
+    if any(item in operation for item in ["向左滑动", "左滑"]):
+        return "left"
+    if any(item in operation for item in ["向右滑动", "右滑"]):
+        return "right"
+    return ""
+
+
+def _extract_input_text(operation: str) -> str:
+    match = re.search(r"输入[“\"']?([^”\"'，,。；;\s]+)", operation)
+    return match.group(1) if match else ""

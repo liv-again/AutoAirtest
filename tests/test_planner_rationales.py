@@ -43,3 +43,13 @@ def test_planner_marks_actions_with_risk_level_and_rationale_ids():
     for action in plan.actions:
         assert action.action_risk_level == ActionRiskLevel.LOW
         assert action.interpretation_rationale_ids
+
+
+def test_planner_extracts_swipe_input_and_back_actions():
+    swipe_plan = RuleBasedPlanner().plan(_case("国内指数列表：向上滑动查看更多指数"))
+    input_plan = RuleBasedPlanner().plan(_case("搜索页：输入600519"))
+    back_plan = RuleBasedPlanner().plan(_case("指数详情页：返回上一页"))
+
+    assert any(action.intent == "swipe" and action.target == "up" for action in swipe_plan.actions)
+    assert any(action.intent == "text" and action.target == "600519" for action in input_plan.actions)
+    assert any(action.intent == "keyevent" and action.target == "BACK" for action in back_plan.actions)
