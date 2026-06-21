@@ -1,0 +1,728 @@
+"""受控设备执行工作流。"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+from autoairtest.models import (
+    ActionResult,
+    ActionRiskLevel,
+    ActionStatus,
+    ExecutionPlan,
+    ExecutionTrace,
+    PlanAction,
+    PlanAmendment,
+    dataclass_to_dict,
+)
+from autoairtest.tools.airtest_adapter import AirtestAdapter
+from autoairtest.tools.ocr_adapter import OCRAdapter
+from autoairtest.tools.poco_adapter import PocoAdapter
+from .stability import PageStabilityWaiter
+
+
+class DeviceWorkflow:
+    """通过 Airtest/Poco 适配器执行 ExecutionPlan。
+
+    该类不直接依赖真实第三方 API，所有设备能力都从适配器进入，方便离线测试和后续 MCP 化。
+    """
+
+    def __init__(
+        self,
+        airtest: Any | None = None,
+        poco: Any | None = None,
+        ocr: Any | None = None,
+        stability_waiter_factory: Any | None = None,
+        correction_budget: dict[str, int] | None = None,
+        retry_config: dict[str, Any] | None = None,
+        app_config: dict[str, Any] | None = None,
+        evidence_config: dict[str, Any] | None = None,
+    ) -> None:
+        self.airtest = airtest or AirtestAdapter()
+        self.poco = poco or PocoAdapter()
+        self.ocr = ocr or OCRAdapter()
+        self.stability_waiter_factory = stability_waiter_factory or self._default_stability_waiter
+        self.correction_budget = correction_budget or {"low": 3, "medium": 1, "high": 0}
+        self.retry_config = {
+            "default_max_attempts": 2,
+            "default_interval_seconds": 1,
+            "poco_dump_max_attempts": 3,
+            "poco_dump_interval_seconds": 1,
+            "poco_dump_backoff": "fixed",
+        } | (retry_config or {})
+        self.app_config = app_config or {}
+        self.evidence_config = {
+            "redact_sensitive_text": True,
+            "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
+            "redaction_placeholder": "[REDACTED]",
+        } | (evidence_config or {})
+
+    def execute_plan(self, plan: ExecutionPlan, case_dir: str | Path) -> list[ActionResult]:
+        root = Path(case_dir)
+        (root / "screenshots").mkdir(parents=True, exist_ok=True)
+        (root / "element_summaries").mkdir(parents=True, exist_ok=True)
+        (root / "ocr").mkdir(parents=True, exist_ok=True)
+        results: list[ActionResult] = []
+        traces: list[ExecutionTrace] = []
+        amendments: list[PlanAmendment] = []
+
+        setup = self._prepare_device()
+        _write_json(root / "device_setup.json", setup)
+        if setup.get("status") == "blocked":
+            results, traces = self._setup_blocked_results(plan, setup)
+            _write_json(root / "execution_trace.json", traces)
+            return results
+
+        for index, action in enumerate(plan.actions, start=1):
+            action_result, trace, amendment = self._execute_action(index, action, root)
+            results.append(action_result)
+            traces.append(trace)
+            if amendment:
+                amendments.append(amendment)
+        _write_json(root / "execution_trace.json", traces)
+        if amendments:
+            _write_json(root / "plan_amendments.json", amendments)
+        return results
+
+    def _execute_action(
+        self,
+        index: int,
+        action: PlanAction,
+        root: Path,
+    ) -> tuple[ActionResult, ExecutionTrace, PlanAmendment | None]:
+        before_screenshot = f"screenshots/{index:03d}_before_{action.action_id}.png"
+        after_screenshot = f"screenshots/{index:03d}_after_{action.action_id}.png"
+        before_summary = f"element_summaries/{index:03d}_before_{action.action_id}.json"
+        after_summary = f"element_summaries/{index:03d}_after_{action.action_id}.json"
+        after_evidence: list[str] = []
+        correction_step: dict[str, Any] | None = None
+        normalized_target = action.target
+        candidate_elements: list[dict[str, Any]] = []
+        selected_element: dict[str, Any] | None = None
+
+        before_snapshot = self._snapshot_with_retry(str(root / before_screenshot))
+        before_dump = self._dump_with_retry()
+        self._write_element_summary(root / before_summary, before_dump)
+        candidate_elements = _candidate_elements(before_dump)
+        hierarchy_unreliable = bool(before_dump.get("hierarchy_unreliable")) or before_dump.get("status") == "unavailable"
+
+        if before_snapshot.get("status") == "unavailable":
+            action_result = ActionResult(
+                action_id=action.action_id,
+                status=ActionStatus.SKIPPED_DEVICE_UNAVAILABLE,
+                locator_level=action.preferred_locator,
+                target_element=None,
+                before_screenshot=before_screenshot,
+                after_screenshot="",
+                element_summary_before=before_summary,
+                element_summary_after="",
+                notes=["Airtest/Poco execution is unavailable in current environment."],
+            )
+            return action_result, _trace(
+                index,
+                action,
+                normalized_target,
+                candidate_elements,
+                selected_element,
+                "Device evidence unavailable before interaction.",
+                [before_screenshot, before_summary],
+                after_evidence,
+                correction_step,
+            ), None
+
+        login_detection = _detect_login_page(before_dump)
+        if login_detection:
+            action_result = ActionResult(
+                action_id=action.action_id,
+                status=ActionStatus.BLOCKED,
+                locator_level=action.preferred_locator,
+                target_element=None,
+                before_screenshot=before_screenshot,
+                after_screenshot="",
+                element_summary_before=before_summary,
+                element_summary_after="",
+                notes=["Login state is not prepared; manual login is required before running this case."],
+            )
+            return action_result, _trace(
+                index,
+                action,
+                normalized_target,
+                candidate_elements,
+                selected_element,
+                f"login_page_detected: {', '.join(login_detection)}",
+                [before_screenshot, before_summary],
+                after_evidence,
+                correction_step,
+            ), None
+
+        if action.action_risk_level == ActionRiskLevel.HIGH:
+            action_result = ActionResult(
+                action_id=action.action_id,
+                status=ActionStatus.BLOCKED,
+                locator_level=action.preferred_locator,
+                target_element=None,
+                before_screenshot=before_screenshot,
+                after_screenshot="",
+                element_summary_before=before_summary,
+                element_summary_after="",
+                notes=["High-risk action requires human confirmation before device interaction."],
+            )
+            return action_result, _trace(
+                index,
+                action,
+                normalized_target,
+                candidate_elements,
+                selected_element,
+                "High-risk action blocked before device interaction.",
+                [before_screenshot, before_summary],
+                after_evidence,
+                correction_step,
+            ), None
+
+        amendment = None
+        if hierarchy_unreliable:
+            action_response, correction_step = self._perform_ocr_degraded_action(action, before_screenshot, index, root)
+        else:
+            action_response, normalized_target, correction_step, amendment = self._perform_action(
+                action,
+                before_dump,
+                before_summary,
+                before_screenshot,
+                index,
+                root,
+            )
+        selected_element = {"target": normalized_target, "response": action_response}
+        before_evidence = [before_screenshot, before_summary]
+        if action_response.get("ocr_evidence"):
+            before_evidence.append(str(action_response["ocr_evidence"]))
+        wait_result = self.stability_waiter_factory().wait()
+        after_snapshot = self._snapshot_with_retry(str(root / after_screenshot))
+        after_dump = self._dump_with_retry()
+        no_response_retry = False
+        page_evidence_unchanged = _should_block_or_retry_no_response(
+            action,
+            action_response,
+            correction_step,
+            before_dump,
+            after_dump,
+        )
+
+        if page_evidence_unchanged and self._default_max_attempts() > 1:
+            retry_response, normalized_target, _, _ = self._perform_action(
+                action,
+                after_dump,
+                before_summary,
+                before_screenshot,
+                index,
+                root,
+            )
+            action_response = retry_response
+            selected_element = {"target": normalized_target, "response": action_response}
+            correction_step = {
+                "type": "action_retry",
+                "attempt": 2,
+                "target": action.target,
+                "reason": "page_evidence_unchanged",
+                "risk_level": action.action_risk_level.value,
+            }
+            no_response_retry = True
+            wait_result = self.stability_waiter_factory().wait()
+            after_snapshot = self._snapshot_with_retry(str(root / after_screenshot))
+            after_dump = self._dump_with_retry()
+            page_evidence_unchanged = _page_evidence_unchanged(before_dump, after_dump)
+        self._write_element_summary(root / after_summary, after_dump)
+        after_evidence = [after_summary]
+        if after_snapshot.get("status") != "unavailable":
+            after_evidence.insert(0, after_screenshot)
+
+        if action_response.get("status") == "success" and not page_evidence_unchanged:
+            status = ActionStatus.SUCCESS
+        elif page_evidence_unchanged:
+            status = ActionStatus.BLOCKED
+        else:
+            status = ActionStatus.FAILED
+        action_result = ActionResult(
+            action_id=action.action_id,
+            status=status,
+            locator_level=action.preferred_locator,
+            target_element=selected_element,
+            before_screenshot=before_screenshot,
+            after_screenshot=after_screenshot if after_snapshot.get("status") != "unavailable" else "",
+            element_summary_before=before_summary,
+            element_summary_after=after_summary,
+            notes=[f"page_stability={wait_result}"]
+            if status == ActionStatus.SUCCESS
+            else [
+                "page_evidence_unchanged_after_retry"
+                if page_evidence_unchanged and no_response_retry
+                else "page_evidence_unchanged"
+                if page_evidence_unchanged
+                else str(action_response.get("reason", "action failed")),
+                f"page_stability={wait_result}",
+            ],
+        )
+        return action_result, _trace(
+            index,
+            action,
+            normalized_target,
+            candidate_elements,
+            selected_element,
+            _execution_rationale(
+                status,
+                hierarchy_unreliable,
+                no_response_retry,
+                page_evidence_unchanged,
+                selected_element,
+            ),
+            before_evidence,
+            after_evidence,
+            correction_step,
+        ), amendment
+
+    def _perform_action(
+        self,
+        action: PlanAction,
+        before_dump: dict[str, Any],
+        before_summary: str,
+        before_screenshot: str,
+        index: int,
+        root: Path,
+    ) -> tuple[dict[str, Any], str, dict[str, Any] | None, PlanAmendment | None]:
+        if action.intent == "observe":
+            return {"status": "success", "source": "observe", "target": action.target}, action.target, None, None
+        if action.intent in {"swipe", "scroll"}:
+            start, end = _swipe_points(action.target)
+            response = self.airtest.swipe(start, end) | {"source": "airtest_swipe"}
+            return response, action.target, None, None
+        if action.intent in {"text", "input"}:
+            response = self.airtest.text(action.target) | {"source": "airtest_text"}
+            return response, action.target, None, None
+        if action.intent in {"keyevent", "back"}:
+            key = "BACK" if action.intent == "back" else action.target
+            response = self.airtest.keyevent(key) | {"source": "airtest_keyevent"}
+            return response, key, None, None
+        if action.intent in {"tap", "click"} or action.preferred_locator.startswith("poco"):
+            response = self.poco.click(action.target)
+            if response.get("status") == "success":
+                return response, action.target, None, None
+            alias = _navigation_alias(action.target, before_dump)
+            if alias and self._correction_budget_for(action) <= 0:
+                return response, action.target, None, None
+            if alias:
+                alias_response = self.poco.click(alias["resolved_target"])
+                if alias_response.get("status") == "success":
+                    correction_step = {
+                        "type": "navigation_alias",
+                        "attempt": 1,
+                        "original_target": action.target,
+                        "resolved_target": alias["resolved_target"],
+                        "risk_level": action.action_risk_level.value,
+                    }
+                    amendment = PlanAmendment(
+                        amendment_id=f"pa{index}",
+                        action_id=action.action_id,
+                        original_target=action.target,
+                        resolved_target=alias["resolved_target"],
+                        reason="navigation alias matched current UI evidence",
+                        matched_skill_rules=alias["matched_skill_rules"],
+                        evidence_files=[before_summary],
+                    )
+                    return alias_response, alias["resolved_target"], correction_step, amendment
+            if self._correction_budget_for(action) <= 0:
+                return response, action.target, None, None
+            ocr_response = self._ocr_fallback(action, before_screenshot, index, root)
+            if ocr_response.get("status") == "success":
+                correction_step = {
+                    "type": "ocr_fallback",
+                    "attempt": 1,
+                    "target": action.target,
+                    "touch_point": list(ocr_response["target"]),
+                    "risk_level": action.action_risk_level.value,
+                }
+                return ocr_response, action.target, correction_step, None
+        response = self.airtest.touch(action.target)
+        return response, action.target, None, None
+
+    def _prepare_device(self) -> dict[str, Any]:
+        connect = self.airtest.connect()
+        if not _ready_status(connect, {"connected", "success"}):
+            return {"status": "blocked", "phase": "connect", "connect": connect}
+
+        package = str(self.app_config.get("package", ""))
+        activity = str(self.app_config.get("activity", ""))
+        if not package:
+            return {
+                "status": "ready",
+                "phase": "prepared",
+                "connect": connect,
+                "start_app": {"status": "skipped", "reason": "app package not configured"},
+            }
+
+        start_app = self._start_app_with_retry(package, activity)
+        if not _ready_status(start_app, {"success", "started"}):
+            return {"status": "blocked", "phase": "start_app", "connect": connect, "start_app": start_app}
+        return {"status": "ready", "phase": "prepared", "connect": connect, "start_app": start_app}
+
+    def _start_app_with_retry(self, package: str, activity: str) -> dict[str, Any]:
+        max_attempts = max(1, int(self.retry_config.get("default_max_attempts", 1) or 1))
+        interval = max(0.0, float(self.retry_config.get("default_interval_seconds", 0) or 0))
+        failures: list[dict[str, Any]] = []
+        last_result: dict[str, Any] = {"status": "unavailable", "package": package, "activity": activity}
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = self.airtest.start_app(package, activity)
+            except Exception as exc:  # pragma: no cover - depends on third-party adapter behavior
+                result = {
+                    "status": "unavailable",
+                    "reason": f"start_app raised {type(exc).__name__}: {exc}",
+                    "package": package,
+                    "activity": activity,
+                }
+            if not isinstance(result, dict):
+                result = {"status": "unavailable", "reason": "start_app returned non-dict"}
+            last_result = result
+            if _ready_status(result, {"success", "started"}):
+                return result | {"attempts": attempt, "previous_failures": failures}
+            failures.append(_dump_failure_summary(result))
+            if attempt < max_attempts and interval > 0:
+                time.sleep(interval)
+        return last_result | {"attempts": max_attempts, "previous_failures": failures}
+
+    def _setup_blocked_results(
+        self,
+        plan: ExecutionPlan,
+        setup: dict[str, Any],
+    ) -> tuple[list[ActionResult], list[ExecutionTrace]]:
+        results: list[ActionResult] = []
+        traces: list[ExecutionTrace] = []
+        status = ActionStatus.SKIPPED_DEVICE_UNAVAILABLE if setup.get("phase") == "connect" else ActionStatus.BLOCKED
+        note = (
+            "Airtest/Poco execution is unavailable in current environment."
+            if setup.get("phase") == "connect"
+            else "App startup failed before device interaction."
+        )
+        rationale = (
+            "Device connection unavailable before interaction."
+            if setup.get("phase") == "connect"
+            else "App startup failed before interaction."
+        )
+
+        for index, action in enumerate(plan.actions, start=1):
+            results.append(
+                ActionResult(
+                    action_id=action.action_id,
+                    status=status,
+                    locator_level=action.preferred_locator,
+                    target_element=None,
+                    before_screenshot="",
+                    after_screenshot="",
+                    element_summary_before="",
+                    element_summary_after="",
+                    notes=[note],
+                )
+            )
+            traces.append(
+                _trace(
+                    index,
+                    action,
+                    action.target,
+                    [],
+                    None,
+                    rationale,
+                    ["device_setup.json"],
+                    [],
+                    None,
+                )
+            )
+        return results, traces
+
+    def _perform_ocr_degraded_action(
+        self,
+        action: PlanAction,
+        before_screenshot: str,
+        index: int,
+        root: Path,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        if self._correction_budget_for(action) <= 0:
+            return {
+                "status": "unavailable",
+                "reason": "poco dump unavailable and correction budget exhausted",
+                "source": "ocr",
+                "query": action.target,
+            }, None
+        response = self._ocr_fallback(action, before_screenshot, index, root)
+        if response.get("status") != "success":
+            return response, None
+        return response, {
+            "type": "ocr_fallback",
+            "attempt": 1,
+            "target": action.target,
+            "touch_point": list(response["target"]),
+            "risk_level": action.action_risk_level.value,
+            "reason": "poco_dump_unavailable",
+        }
+
+    def _default_stability_waiter(self) -> PageStabilityWaiter:
+        return PageStabilityWaiter(sampler=lambda: _dump_signature(self.poco.dump()))
+
+    def _correction_budget_for(self, action: PlanAction) -> int:
+        return int(self.correction_budget.get(action.action_risk_level.value, 0) or 0)
+
+    def _default_max_attempts(self) -> int:
+        return max(1, int(self.retry_config.get("default_max_attempts", 1) or 1))
+
+    def _dump_with_retry(self) -> dict[str, Any]:
+        max_attempts = max(1, int(self.retry_config.get("poco_dump_max_attempts", 1) or 1))
+        interval = max(0.0, float(self.retry_config.get("poco_dump_interval_seconds", 0) or 0))
+        failures: list[dict[str, Any]] = []
+        last_dump: dict[str, Any] = {}
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                dump = self.poco.dump()
+            except Exception as exc:  # pragma: no cover - depends on third-party adapter behavior
+                dump = {"status": "unavailable", "reason": f"poco dump raised {type(exc).__name__}: {exc}"}
+            if not isinstance(dump, dict):
+                dump = {"status": "unavailable", "reason": "poco dump returned non-dict"}
+            last_dump = dump
+            if dump.get("status") != "unavailable":
+                return dump | {"dump_attempts": attempt, "previous_failures": failures}
+            failures.append(_dump_failure_summary(dump))
+            if attempt < max_attempts and interval > 0:
+                time.sleep(interval)
+        return last_dump | {
+            "dump_attempts": max_attempts,
+            "previous_failures": failures,
+            "hierarchy_unreliable": True,
+        }
+
+    def _snapshot_with_retry(self, filename: str) -> dict[str, Any]:
+        max_attempts = max(1, int(self.retry_config.get("default_max_attempts", 1) or 1))
+        interval = max(0.0, float(self.retry_config.get("default_interval_seconds", 0) or 0))
+        failures: list[dict[str, Any]] = []
+        last_snapshot: dict[str, Any] = {"status": "unavailable", "filename": filename}
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                snapshot = self.airtest.snapshot(filename)
+            except Exception as exc:  # pragma: no cover - depends on third-party adapter behavior
+                snapshot = {
+                    "status": "unavailable",
+                    "reason": f"snapshot raised {type(exc).__name__}: {exc}",
+                    "filename": filename,
+                }
+            if not isinstance(snapshot, dict):
+                snapshot = {"status": "unavailable", "reason": "snapshot returned non-dict", "filename": filename}
+            last_snapshot = snapshot
+            if snapshot.get("status") != "unavailable":
+                return snapshot | {"snapshot_attempts": attempt, "previous_failures": failures}
+            failures.append(_dump_failure_summary(snapshot))
+            if attempt < max_attempts and interval > 0:
+                time.sleep(interval)
+        return last_snapshot | {"snapshot_attempts": max_attempts, "previous_failures": failures}
+
+    def _write_element_summary(self, path: Path, payload: dict[str, Any]) -> None:
+        _write_json(path, _redact_sensitive_text(payload, self.evidence_config))
+
+    def _ocr_fallback(self, action: PlanAction, before_screenshot: str, index: int, root: Path) -> dict[str, Any]:
+        ocr_path = f"ocr/{index:03d}_before_{action.action_id}.json"
+        ocr_result = self.ocr.recognize(str(root / before_screenshot))
+        _write_json(root / ocr_path, ocr_result)
+        match = _ocr_match(action.target, ocr_result)
+        if not match:
+            return {"status": "unavailable", "reason": "ocr target not found", "source": "ocr", "query": action.target}
+        touch_point = _bounds_center(match["bounds"])
+        response = self.airtest.touch(touch_point)
+        if response.get("status") != "success":
+            return response | {"source": "ocr", "query": action.target, "target": touch_point}
+        return {
+            "status": "success",
+            "source": "ocr",
+            "query": action.target,
+            "target": touch_point,
+            "match": match,
+            "ocr_evidence": ocr_path,
+        }
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dataclass_to_dict(payload), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _dump_signature(dump: dict[str, Any]) -> str:
+    visible_texts = dump.get("visible_texts", [])
+    if isinstance(visible_texts, list):
+        return "|".join(str(item) for item in visible_texts)
+    return str(visible_texts)
+
+
+def _dump_failure_summary(dump: dict[str, Any]) -> dict[str, Any]:
+    summary = {"status": str(dump.get("status", "unavailable"))}
+    if dump.get("reason"):
+        summary["reason"] = str(dump["reason"])
+    return summary
+
+
+def _ready_status(result: dict[str, Any], ready_values: set[str]) -> bool:
+    return isinstance(result, dict) and str(result.get("status", "")) in ready_values
+
+
+def _redact_sensitive_text(value: Any, evidence_config: dict[str, Any]) -> Any:
+    if not evidence_config.get("redact_sensitive_text", True):
+        return value
+    keywords = [str(item) for item in evidence_config.get("sensitive_keywords", []) if str(item)]
+    placeholder = str(evidence_config.get("redaction_placeholder", "[REDACTED]"))
+    if isinstance(value, dict):
+        return {key: _redact_sensitive_text(item, evidence_config) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive_text(item, evidence_config) for item in value]
+    if isinstance(value, str) and any(keyword in value for keyword in keywords):
+        return placeholder
+    return value
+
+
+def _page_evidence_unchanged(before_dump: dict[str, Any], after_dump: dict[str, Any]) -> bool:
+    if before_dump.get("status") == "unavailable" or after_dump.get("status") == "unavailable":
+        return False
+    return _dump_signature(before_dump) == _dump_signature(after_dump)
+
+
+def _should_block_or_retry_no_response(
+    action: PlanAction,
+    action_response: dict[str, Any],
+    correction_step: dict[str, Any] | None,
+    before_dump: dict[str, Any],
+    after_dump: dict[str, Any],
+) -> bool:
+    return (
+        action.intent in {"tap", "click", "navigate"}
+        and action_response.get("status") == "success"
+        and correction_step is None
+        and int(before_dump.get("dump_attempts", 1) or 1) >= 1
+        and _page_evidence_unchanged(before_dump, after_dump)
+    )
+
+
+def _swipe_points(target: Any) -> tuple[Any, Any]:
+    if isinstance(target, dict) and "start" in target and "end" in target:
+        return target["start"], target["end"]
+    direction = str(target).lower()
+    if direction in {"up", "向上", "上滑", "向上滑动", "swipe_up"}:
+        return (0.5, 0.8), (0.5, 0.2)
+    if direction in {"down", "向下", "下滑", "向下滑动", "swipe_down"}:
+        return (0.5, 0.2), (0.5, 0.8)
+    if direction in {"left", "向左", "左滑", "向左滑动", "swipe_left"}:
+        return (0.8, 0.5), (0.2, 0.5)
+    if direction in {"right", "向右", "右滑", "向右滑动", "swipe_right"}:
+        return (0.2, 0.5), (0.8, 0.5)
+    return (0.5, 0.8), (0.5, 0.2)
+
+
+def _execution_rationale(
+    status: ActionStatus,
+    hierarchy_unreliable: bool,
+    no_response_retry: bool = False,
+    page_evidence_unchanged: bool = False,
+    selected_element: dict[str, Any] | None = None,
+) -> str:
+    if selected_element and selected_element.get("response", {}).get("source") == "observe":
+        return "observation_only; evidence collected without device interaction."
+    if no_response_retry:
+        if status == ActionStatus.SUCCESS:
+            return "click_no_response_retry; page evidence changed after retry."
+        return "click_no_response_retry; page evidence unchanged after retry."
+    if page_evidence_unchanged:
+        return "page_evidence_unchanged; action blocked without retry budget."
+    if hierarchy_unreliable:
+        if status == ActionStatus.SUCCESS:
+            return "poco_dump_unavailable; OCR fallback executed with screenshot evidence."
+        return "poco_dump_unavailable; action failed after OCR fallback."
+    return "Poco semantic action executed." if status == ActionStatus.SUCCESS else "Action failed after device call."
+
+
+def _candidate_elements(dump: dict[str, Any]) -> list[dict[str, Any]]:
+    elements = dump.get("elements", [])
+    if isinstance(elements, list):
+        return [item for item in elements if isinstance(item, dict)]
+    visible_texts = dump.get("visible_texts", [])
+    if isinstance(visible_texts, list):
+        return [{"text": str(item)} for item in visible_texts]
+    return []
+
+
+def _navigation_alias(target: str, dump: dict[str, Any]) -> dict[str, Any] | None:
+    visible_texts = {str(item) for item in dump.get("visible_texts", []) if str(item)}
+    if target == "自选" and "我的自选" in visible_texts:
+        return {"resolved_target": "我的自选", "matched_skill_rules": ["navigation_alias.self_selected"]}
+    return None
+
+
+def _detect_login_page(dump: dict[str, Any]) -> list[str]:
+    visible_texts = [str(item) for item in dump.get("visible_texts", []) if str(item)]
+    keywords = ["登录", "手机号", "验证码", "密码"]
+    matched = []
+    for keyword in keywords:
+        if any(keyword in text for text in visible_texts):
+            matched.append(keyword)
+    if "登录" in matched and any(item in matched for item in ["手机号", "验证码", "密码"]):
+        return matched
+    return []
+
+
+def _ocr_match(target: str, ocr_result: dict[str, Any]) -> dict[str, Any] | None:
+    texts = ocr_result.get("texts", [])
+    if not isinstance(texts, list):
+        return None
+    for item in texts:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text", ""))
+        bounds = item.get("bounds")
+        if target and target in text and _valid_bounds(bounds):
+            return {"text": text, "bounds": bounds}
+    return None
+
+
+def _valid_bounds(bounds: Any) -> bool:
+    return (
+        isinstance(bounds, list)
+        and len(bounds) == 4
+        and all(isinstance(item, int | float) for item in bounds)
+        and bounds[2] > bounds[0]
+        and bounds[3] > bounds[1]
+    )
+
+
+def _bounds_center(bounds: list[int | float]) -> tuple[int, int]:
+    return (int((bounds[0] + bounds[2]) / 2), int((bounds[1] + bounds[3]) / 2))
+
+
+def _trace(
+    index: int,
+    action: PlanAction,
+    normalized_target: str,
+    candidate_elements: list[dict[str, Any]],
+    selected_element: dict[str, Any] | None,
+    execution_rationale: str,
+    before_evidence: list[str],
+    after_evidence: list[str],
+    correction_step: dict[str, Any] | None,
+) -> ExecutionTrace:
+    return ExecutionTrace(
+        trace_id=f"t{index}",
+        trace_type="action",
+        action_id=action.action_id,
+        planned_target=action.target,
+        normalized_target=normalized_target,
+        candidate_elements=candidate_elements,
+        selected_element=selected_element,
+        action_risk_level=action.action_risk_level,
+        execution_rationale=execution_rationale,
+        before_evidence=before_evidence,
+        after_evidence=after_evidence,
+        correction_step=correction_step,
+    )
