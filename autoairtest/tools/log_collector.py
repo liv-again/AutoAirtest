@@ -1,0 +1,58 @@
+"""Android logcat 采集工具边界。"""
+
+from __future__ import annotations
+
+import subprocess
+from typing import Any, Callable
+
+from .crash_analyzer import extract_crash_signatures
+
+CommandRunner = Callable[[list[str]], dict[str, str]]
+
+
+class LogCollector:
+    """封装 logcat 查询和崩溃解析。
+
+    runner 可注入，便于离线测试；生产默认使用 subprocess 执行 adb。
+    """
+
+    def __init__(
+        self,
+        adb_path: str = "adb",
+        enabled: bool = True,
+        runner: CommandRunner | None = None,
+    ) -> None:
+        self.adb_path = adb_path
+        self.enabled = enabled
+        self._runner = runner or _run_command
+
+    def get_recent_crashes(self, package: str = "", lines: int = 300) -> dict[str, Any]:
+        """读取最近 logcat 并返回结构化 crash 结果。"""
+
+        if not self.enabled:
+            return {"status": "disabled", "reason": "log capture is disabled", "crash_count": 0, "crashes": []}
+        if not self.adb_path:
+            return {"status": "unavailable", "reason": "adb path is empty", "crash_count": 0, "crashes": []}
+
+        command = [self.adb_path, "logcat", "-d", "-t", str(lines)]
+        output = self._runner(command)
+        if output.get("status") != "success":
+            return {
+                "status": "unavailable",
+                "reason": output.get("stderr", "adb logcat failed"),
+                "crash_count": 0,
+                "crashes": [],
+            }
+
+        crashes = extract_crash_signatures(output.get("stdout", ""), package=package)
+        return {"status": "success", "reason": "", "crash_count": len(crashes), "crashes": crashes}
+
+
+def _run_command(args: list[str]) -> dict[str, str]:
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "error", "stdout": "", "stderr": str(exc)}
+    if completed.returncode != 0:
+        return {"status": "error", "stdout": completed.stdout, "stderr": completed.stderr}
+    return {"status": "success", "stdout": completed.stdout, "stderr": completed.stderr}
