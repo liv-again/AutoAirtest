@@ -1,5 +1,6 @@
 import json
 
+from autoairtest.tools import llm_client
 from autoairtest.tools.llm_client import LLMClient
 
 
@@ -69,3 +70,81 @@ def test_llm_client_redacts_sensitive_prompt_text_before_provider_call():
 
     assert result["status"] == "success"
     assert calls[0]["prompt"] == "页面展示[REDACTED] 和[REDACTED]"
+
+
+def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "observation_summary": "页面证据已采集。",
+                                        "manual_review_reason": "data_correctness",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+
+    client = LLMClient(
+        config={
+            "enabled": True,
+            "base_url": "https://example.test/v1",
+            "api_key": "test-key",
+            "model": "test-model",
+            "timeout_seconds": 12,
+        }
+    )
+    result = client.json_call(
+        "只输出 JSON",
+        {"type": "object", "required": ["observation_summary", "manual_review_reason"]},
+    )
+
+    assert result["status"] == "success"
+    assert captured["url"] == "https://example.test/v1/chat/completions"
+    assert captured["timeout"] == 12
+    assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["body"]["model"] == "test-model"
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert result["data"]["manual_review_reason"] == "data_correctness"
+
+
+def test_llm_client_reports_unavailable_when_enabled_without_api_key(monkeypatch):
+    monkeypatch.delenv("AUTOAIRTEST_TEST_LLM_KEY", raising=False)
+
+    client = LLMClient(
+        config={
+            "enabled": True,
+            "api_key": "",
+            "api_key_env": "AUTOAIRTEST_TEST_LLM_KEY",
+        }
+    )
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["status"] == "unavailable"
+    assert "AUTOAIRTEST_TEST_LLM_KEY" in result["reason"]

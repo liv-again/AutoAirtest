@@ -17,6 +17,12 @@ def test_default_config_exposes_latest_design_session_logs_doctor_and_state_grap
     assert config["evidence"]["redact_sensitive_text"] is True
     assert "手机号" in config["evidence"]["sensitive_keywords"]
     assert config["evidence"]["screenshot_redaction"] is False
+    assert config["llm"]["enabled"] is False
+    assert config["llm"]["provider"] == "openai_compatible"
+    assert config["llm"]["base_url"] == "https://api.openai.com/v1"
+    assert config["llm"]["api_key_env"] == "OPENAI_API_KEY"
+    assert config["llm"]["use_for_planning"] is False
+    assert config["llm"]["use_for_verification"] is True
 
 
 def test_merge_config_preserves_nested_latest_design_defaults():
@@ -26,3 +32,4 @@ def test_merge_config_preserves_nested_latest_design_defaults():
     assert merged["logs"]["default_window_seconds"] == 5
     assert "AndroidRuntime" in merged["logs"]["crash_patterns"]
     assert merged["execution"]["correction_budget"]["low"] == 3
+    assert merged["llm"]["base_url"] == "https://api.openai.com/v1"

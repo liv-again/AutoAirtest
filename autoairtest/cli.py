@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Any
 
 from .config import default_config, load_config, merge_config, write_config_template
 from .orchestrator import run_offline
@@ -80,12 +81,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run":
-        execution_overrides = {"mode": args.execution_mode or "offline"}
+        execution_overrides: dict[str, Any] = {}
+        if args.execution_mode:
+            execution_overrides["mode"] = args.execution_mode
         if args.max_steps_per_case is not None:
             execution_overrides["max_steps_per_case"] = args.max_steps_per_case
         if args.enable_state_graph:
             execution_overrides["enable_state_graph"] = True
-        correction_budget = {}
+        correction_budget: dict[str, int] = {}
         if args.correction_budget_low is not None:
             correction_budget["low"] = args.correction_budget_low
         if args.correction_budget_medium is not None:
@@ -98,17 +101,25 @@ def main(argv: list[str] | None = None) -> int:
             case_params = _parse_case_params(args.case_param)
         except ValueError as exc:
             parser.error(str(exc))
-        overrides = {
+        app_overrides: dict[str, str] = {}
+        if args.app_package:
+            app_overrides["package"] = args.app_package
+        if args.app_activity:
+            app_overrides["activity"] = args.app_activity
+        device_overrides: dict[str, str] = {}
+        if args.adb_serial:
+            device_overrides["adb_serial"] = args.adb_serial
+        input_overrides: dict[str, Any] = {
+            "case_filter": args.case_filter,
+            "case_params": case_params,
+        }
+        if args.excel:
+            input_overrides["excel_path"] = args.excel
+        if args.sheet:
+            input_overrides["sheet_name"] = args.sheet
+        overrides: dict[str, Any] = {
             "config": args.config,
-            "execution": execution_overrides,
-            "input": {
-                "excel_path": args.excel or "docs/test-cases.xlsx",
-                "sheet_name": args.sheet or "需求测试报告",
-                "case_filter": args.case_filter,
-                "case_params": case_params,
-            },
-            "app": {"package": args.app_package, "activity": args.app_activity},
-            "device": {"adb_serial": args.adb_serial},
+            "input": input_overrides,
             "report": {
                 "output_dir": args.output_dir or "runs",
                 "session_name": args.session_name,
@@ -116,6 +127,12 @@ def main(argv: list[str] | None = None) -> int:
                 "write_back_excel": args.write_back_excel,
             },
         }
+        if execution_overrides:
+            overrides["execution"] = execution_overrides
+        if app_overrides:
+            overrides["app"] = app_overrides
+        if device_overrides:
+            overrides["device"] = device_overrides
         if args.disable_log_capture:
             overrides["logs"] = {"enable_capture": False}
         if args.evidence_recollection_attempts is not None:

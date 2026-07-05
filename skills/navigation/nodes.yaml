@@ -1,0 +1,319 @@
+version: 1
+schema: navigation_tree_nodes
+source: ../../中原证券菜单结构.md
+roots:
+  - home
+  - market
+  - trade
+  - profile
+  - wealth
+nodes:
+  home:
+    text: 首页
+    parent: null
+    aliases: []
+    children:
+      - home_search
+  home_search:
+    text: 搜索
+    parent: home
+    aliases:
+      - 首页搜索
+    children: []
+  market:
+    text: 行情
+    parent: null
+    aliases:
+      - 行情首页
+    children:
+      - market_quotes
+      - market_search
+  market_quotes:
+    text: 行情
+    parent: market
+    aliases:
+      - 行情页行情
+      - 行情分类
+    children:
+      - market_global
+      - market_a_share
+      - market_hk
+      - market_other
+  market_global:
+    text: 全球
+    parent: market_quotes
+    aliases:
+      - 全球行情
+    children: []
+  market_a_share:
+    text: A股
+    parent: market_quotes
+    aliases:
+      - A股行情
+    children:
+      - cn_a_market
+      - sector
+      - star_market
+  cn_a_market:
+    text: 沪深京
+    parent: market_a_share
+    aliases:
+      - 沪深
+      - 沪深京A股
+    children: []
+  sector:
+    text: 板块
+    parent: market_a_share
+    aliases:
+      - 行业板块
+    children: []
+  star_market:
+    text: 科创板
+    parent: market_a_share
+    aliases: []
+    children: []
+  market_hk:
+    text: 港股
+    parent: market_quotes
+    aliases:
+      - 港股行情
+    children: []
+  market_other:
+    text: 其他
+    parent: market_quotes
+    aliases:
+      - 其他行情
+    children:
+      - global_market
+      - fund
+      - individual_stock
+      - bond
+  global_market:
+    text: 全球市场
+    parent: market_other
+    aliases: []
+    children:
+      - domestic_futures
+      - forex
+      - global_market_hk
+  domestic_futures:
+    text: 国内期货
+    parent: global_market
+    aliases: []
+    children: []
+  forex:
+    text: 外汇
+    parent: global_market
+    aliases: []
+    children: []
+  global_market_hk:
+    text: 港股
+    parent: global_market
+    aliases:
+      - 全球市场港股
+    children: []
+  fund:
+    text: 基金
+    parent: market_other
+    aliases:
+      - 基金行情
+    children:
+      - hs_closed_end_fund
+      - sh_closed_end_fund
+      - sz_closed_end_fund
+      - plus_minus_20_fund
+      - reits_fund
+  hs_closed_end_fund:
+    text: 沪深封闭基金
+    parent: fund
+    aliases: []
+    children: []
+  sh_closed_end_fund:
+    text: 上证封闭基金
+    parent: fund
+    aliases: []
+    children: []
+  sz_closed_end_fund:
+    text: 深证封闭基金
+    parent: fund
+    aliases: []
+    children: []
+  plus_minus_20_fund:
+    text: ±20%基金
+    parent: fund
+    aliases:
+      - 正负20基金
+      - 20%基金
+    children: []
+  reits_fund:
+    text: REITs基金
+    parent: fund
+    aliases:
+      - REITs
+    children: []
+  individual_stock:
+    text: 个股
+    parent: market_other
+    aliases:
+      - 个股行情
+    children:
+      - sh_a_stock
+      - sh_b_stock
+      - sz_a_stock
+      - sz_b_stock
+      - bj_a_stock
+      - individual_chinext
+      - new_third_board
+      - third_board
+      - risk_warning
+      - delisting_arrangement
+  sh_a_stock:
+    text: 上证A股
+    parent: individual_stock
+    aliases: []
+    children: []
+  sh_b_stock:
+    text: 上证B股
+    parent: individual_stock
+    aliases: []
+    children: []
+  sz_a_stock:
+    text: 深证A股
+    parent: individual_stock
+    aliases: []
+    children: []
+  sz_b_stock:
+    text: 深证B股
+    parent: individual_stock
+    aliases: []
+    children: []
+  bj_a_stock:
+    text: 北证A股
+    parent: individual_stock
+    aliases: []
+    children: []
+  individual_chinext:
+    text: 创业板
+    parent: individual_stock
+    aliases:
+      - 个股创业板
+    children: []
+  new_third_board:
+    text: 新三板
+    parent: individual_stock
+    aliases: []
+    children: []
+  third_board:
+    text: 三板
+    parent: individual_stock
+    aliases: []
+    children: []
+  risk_warning:
+    text: 风险警示
+    parent: individual_stock
+    aliases:
+      - ST
+    children: []
+  delisting_arrangement:
+    text: 退市整理
+    parent: individual_stock
+    aliases:
+      - 退市整理股
+    children: []
+  bond:
+    text: 债券
+    parent: market_other
+    aliases:
+      - 债券行情
+    children:
+      - general_repo
+      - hs_bond
+      - sh_bond
+      - sz_bond
+      - bj_bond
+      - convertible_bond
+      - delisting_convertible_bond
+  general_repo:
+    text: 通用回购
+    parent: bond
+    aliases: []
+    children: []
+  hs_bond:
+    text: 沪深债券
+    parent: bond
+    aliases: []
+    children: []
+  sh_bond:
+    text: 上证债券
+    parent: bond
+    aliases: []
+    children: []
+  sz_bond:
+    text: 深证债券
+    parent: bond
+    aliases: []
+    children: []
+  bj_bond:
+    text: 北证债券
+    parent: bond
+    aliases: []
+    children: []
+  convertible_bond:
+    text: 可转债
+    parent: bond
+    aliases: []
+    children: []
+  delisting_convertible_bond:
+    text: 退市整理可转债
+    parent: bond
+    aliases: []
+    children: []
+  market_search:
+    text: 搜索
+    parent: market
+    aliases:
+      - 行情搜索
+    children: []
+  trade:
+    text: 交易
+    parent: null
+    aliases: []
+    children:
+      - normal_trade
+      - margin_trading
+      - stock_options
+  normal_trade:
+    text: 普通交易
+    parent: trade
+    aliases: []
+    children: []
+  margin_trading:
+    text: 融资融券
+    parent: trade
+    aliases:
+      - 两融
+    children: []
+  stock_options:
+    text: 股票期权
+    parent: trade
+    aliases: []
+    children: []
+  profile:
+    text: 我的
+    parent: null
+    aliases:
+      - 个人中心
+    children:
+      - settings
+  settings:
+    text: 设置
+    parent: profile
+    aliases:
+      - 系统设置
+    children: []
+  wealth:
+    text: 理财
+    parent: null
+    aliases:
+      - 理财产品
+    children: []

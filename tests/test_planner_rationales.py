@@ -1,5 +1,6 @@
 from autoairtest.agents.planner import RuleBasedPlanner
 from autoairtest.models import ActionRiskLevel, NaturalLanguageTestCase
+from autoairtest.planning.skill_registry import SkillRegistry
 
 
 def _case(operation_description: str) -> NaturalLanguageTestCase:
@@ -53,3 +54,40 @@ def test_planner_extracts_swipe_input_and_back_actions():
     assert any(action.intent == "swipe" and action.target == "up" for action in swipe_plan.actions)
     assert any(action.intent == "text" and action.target == "600519" for action in input_plan.actions)
     assert any(action.intent == "keyevent" and action.target == "BACK" for action in back_plan.actions)
+
+
+def test_planner_uses_navigation_skill_nodes(tmp_path):
+    skill_dir = tmp_path / "skills" / "navigation"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("nodes.yaml").write_text(
+        """
+roots:
+  - market
+nodes:
+  market:
+    text: 行情
+    parent: null
+    aliases: []
+    children: [market_a_share]
+  market_a_share:
+    text: A股
+    parent: market
+    aliases: [A股行情]
+    children: [cn_a_market]
+  cn_a_market:
+    text: 沪深京
+    parent: market_a_share
+    aliases: [沪深]
+    children: []
+""".strip(),
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(tmp_path / "skills")
+
+    plan = RuleBasedPlanner(skill_registry=registry).plan(_case("进入行情-A股-沪深"))
+
+    assert [action.target for action in plan.actions[:3]] == ["行情", "A股", "沪深京"]
+    assert any(
+        rationale.matched_skill_rules == ["navigation_node.cn_a_market"]
+        for rationale in plan.interpretation_rationales
+    )

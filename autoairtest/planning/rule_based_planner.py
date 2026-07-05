@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from dataclasses import replace
+from pathlib import Path
 
 from autoairtest.execution.risk_policy import RiskPolicy
 from autoairtest.models import (
@@ -19,6 +20,7 @@ from autoairtest.models import (
     VerificationGoal,
     VerificationGoalCategory,
 )
+from autoairtest.planning.skill_registry import NavigationNode, SkillRegistry
 
 
 # 以下顺序常量来自需求文档中的业务预期，用于生成顺序类验证目标。
@@ -30,13 +32,22 @@ DETAIL_WITHOUT_INDUSTRY_ORDER = ["上证指数", "深证成指", "科创综指",
 class RuleBasedPlanner:
     """把自然语言测试用例转换为结构化执行计划的规则型规划器。"""
 
+    def __init__(
+        self,
+        skill_registry: SkillRegistry | None = None,
+        skills_root: str | Path = "skills",
+    ) -> None:
+        self.skill_registry = skill_registry or SkillRegistry(skills_root)
+
     def plan(self, case: NaturalLanguageTestCase) -> ExecutionPlan:
         """生成执行计划。
 
         当前版本只做语义拆解，不生成 Python 脚本，也不承诺行情数据自动最终正确。
         """
 
-        actions = self._actions_for(case.operation_description)
+        navigation_context = self._navigation_context_for(case)
+        navigation_path = self.skill_registry.resolve_navigation_path(navigation_context)
+        actions = self._actions_for(case, navigation_path)
         goals = self._goals_for(case)
         return ExecutionPlan(
             case_id=case.internal_id,
@@ -51,23 +62,45 @@ class RuleBasedPlanner:
             actions=actions,
             verification_goals=goals,
             manual_review_notes=["Rule-based offline plan; no Python code generated."],
-            interpretation_rationales=self._rationales_for(case.operation_description),
+            interpretation_rationales=self._rationales_for(case, navigation_path),
         )
 
-    def _actions_for(self, operation: str) -> list[PlanAction]:
+    def _actions_for(self, case: NaturalLanguageTestCase, navigation_path: list[NavigationNode]) -> list[PlanAction]:
         """从操作描述中抽取导航、点击或观察动作。"""
 
+        operation = case.operation_description
         targets: list[tuple[str, str, str, list[str]]] = []
+        navigation_targets = {node.text for node in navigation_path}
+        targets.extend(
+            (
+                "navigate",
+                f"进入{node.text}",
+                node.text,
+                [f"ir_navigation_{node.node_id}"],
+            )
+            for node in navigation_path
+        )
+
+        def add_legacy_target(
+            intent: str,
+            description: str,
+            target: str,
+            rationale_ids: list[str],
+        ) -> None:
+            if target in navigation_targets:
+                return
+            targets.append((intent, description, target, rationale_ids))
+
         if "行情" in operation:
-            targets.append(("navigate", "进入行情页", "行情", ["ir_market"]))
+            add_legacy_target("navigate", "进入行情页", "行情", ["ir_market"])
         if "股指" in operation:
-            targets.append(("navigate", "进入股指区域", "股指", ["ir_stock_index"]))
+            add_legacy_target("navigate", "进入股指区域", "股指", ["ir_stock_index"])
         if "A股" in operation or "沪深京" in operation:
-            targets.append(("navigate", "进入A股沪深京区域", "沪深京", ["ir_a_share"]))
+            add_legacy_target("navigate", "进入A股沪深京区域", "沪深京", ["ir_a_share"])
         if operation.startswith("自选") or "自选：" in operation or "自选-" in operation:
-            targets.append(("navigate", "进入我的自选区域", "我的自选", ["ir_self_selected"]))
+            add_legacy_target("navigate", "进入我的自选区域", "我的自选", ["ir_self_selected"])
         if "国内指数" in operation:
-            targets.append(("navigate", "进入国内指数区域", "国内指数", ["ir_domestic_index"]))
+            add_legacy_target("navigate", "进入国内指数区域", "国内指数", ["ir_domestic_index"])
         if "更多" in operation:
             targets.append(("tap", "点击右侧更多按钮", "更多", ["ir_more"]))
         if "科创综指" in operation and "点击" in operation:
@@ -104,10 +137,41 @@ class RuleBasedPlanner:
         ]
         return [replace(action, action_risk_level=policy.classify(action)) for action in actions]
 
-    def _rationales_for(self, operation: str) -> list[InterpretationRationale]:
+    def _navigation_context_for(self, case: NaturalLanguageTestCase) -> str:
+        """拼接用例上下文，供导航节点匹配使用。"""
+
+        parts = [
+            case.business_module,
+            case.feature_module,
+            case.feature_item,
+            case.step_name,
+            case.operation_description,
+        ]
+        return " ".join(str(part).strip() for part in parts if str(part).strip())
+
+    def _rationales_for(
+        self,
+        case: NaturalLanguageTestCase,
+        navigation_path: list[NavigationNode],
+    ) -> list[InterpretationRationale]:
         """生成当前规则 planner 能解释的结构化依据。"""
 
+        operation = case.operation_description
+        navigation_context = self._navigation_context_for(case)
         rationales: list[InterpretationRationale] = []
+        for node in navigation_path:
+            rationales.append(
+                InterpretationRationale(
+                    rationale_id=f"ir_navigation_{node.node_id}",
+                    original_expression=navigation_context,
+                    normalized_meaning=node.text,
+                    interpretation_type="navigation_path",
+                    confidence=0.88,
+                    matched_skill_rules=[f"navigation_node.{node.node_id}"],
+                    basis=f"命中 navigation skill 节点 {node.node_id}，按父节点回溯生成菜单路径。",
+                    human_review_required=False,
+                )
+            )
         if operation.startswith("自选") or "自选：" in operation or "自选-" in operation:
             rationales.append(
                 InterpretationRationale(

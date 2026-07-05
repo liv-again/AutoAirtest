@@ -30,6 +30,9 @@ def default_config() -> dict[str, Any]:
             "sheet_name": "需求测试报告",
             "case_filter": "",
         },
+        "skills": {
+            "root": "skills",
+        },
         "execution": {
             "mode": "offline",
             "continue_on_case_failure": True,
@@ -79,7 +82,22 @@ def default_config() -> dict[str, Any]:
             "redaction_placeholder": "[REDACTED]",
             "screenshot_redaction": False,
         },
-        "llm": {"model": "configured-by-env", "temperature": 0.1, "max_retries": 2},
+        "llm": {
+            "enabled": False,
+            "provider": "openai_compatible",
+            "base_url": "https://api.openai.com/v1",
+            "chat_completions_path": "/chat/completions",
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key": "",
+            "model": "configured-by-env",
+            "temperature": 0.1,
+            "max_retries": 2,
+            "timeout_seconds": 60,
+            "use_for_planning": False,
+            "use_for_verification": True,
+            "response_format_json": True,
+            "system_prompt": "你是移动 App 测试结果初判助手。只输出符合 schema 的 JSON。",
+        },
         "report": {
             "output_dir": "runs",
             "session_name": "",

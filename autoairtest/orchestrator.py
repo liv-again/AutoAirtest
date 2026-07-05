@@ -25,10 +25,12 @@ from .tools.evidence_store import EvidenceStore, safe_path_name
 from .tools.llm_client import LLMClient
 from .tools.log_collector import LogCollector
 from .planning.planning_agent import PlanningAgent
+from .planning.skill_registry import SkillRegistry
 from .verification.evidence_recollection import EvidenceRecollector
 from .verification.verification_agent import VerificationAgent
 
 
+# 主入口：合并配置、执行用例流水线，并返回本次运行的证据目录。
 def run_offline(config_overrides: dict[str, Any]) -> Path:
     """执行一次离线测试运行并返回运行目录。
 
@@ -36,8 +38,14 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     """
 
     overrides = dict(config_overrides)
+    # 优先级：默认配置 < config.yaml < 命令行参数
     config = default_config()
     config_path = overrides.pop("config", "")
+    if not config_path:
+        # 未指定 --config 时自动发现项目根目录的 config.yaml
+        auto_config = Path("config.yaml")
+        if auto_config.exists():
+            config_path = str(auto_config)
     if config_path:
         config = merge_config(config, load_config(config_path))
     config = merge_config(config, overrides)
@@ -48,7 +56,11 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     session_suffix = safe_path_name(str(config["report"].get("session_name", "")))
     session_id = f"{timestamp}_{session_suffix}" if session_suffix else timestamp
     store = EvidenceStore(config["report"]["output_dir"], session_id)
-    planner = PlanningAgent(llm_client=None, rule_based_planner=RuleBasedPlanner())
+    skill_registry = SkillRegistry(config.get("skills", {}).get("root", "skills"))
+    planner = PlanningAgent(
+        llm_client=_planning_llm_client(config),
+        rule_based_planner=_build_rule_based_planner(skill_registry),
+    )
 
     cases = _filter_cases(_load_cases_or_dependency_case(config), config["input"].get("case_filter", ""))
     cases = _apply_case_param_overrides(cases, config["input"].get("case_params", {}))
@@ -175,10 +187,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             ),
         }
         if verification_evidence["llm_preliminary_judgment"]:
-            verification_evidence["llm_client"] = LLMClient(
-                config=config.get("llm", {}),
-                evidence_config=config.get("evidence", {}),
-            )
+            verification_evidence["llm_client"] = _verification_llm_client(config)
         max_recollection_attempts = _max_evidence_recollection_attempts(config)
         recollector = (
             EvidenceRecollector(max_attempts=max_recollection_attempts)
@@ -268,6 +277,16 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     return store.root
 
 
+def _build_rule_based_planner(skill_registry: SkillRegistry):
+    """构造规则 planner；兼容测试中替换的无参 planner 类。"""
+
+    try:
+        return RuleBasedPlanner(skill_registry=skill_registry)
+    except TypeError:
+        return RuleBasedPlanner()
+
+
+# 加载 Excel 测试用例；缺少 Excel 依赖时生成一条诊断用例保持流程可运行。
 def _load_cases_or_dependency_case(config: dict[str, Any]):
     """加载 Excel 用例；当缺少 openpyxl 时生成一条环境诊断用例。"""
 
@@ -297,6 +316,23 @@ def _load_cases_or_dependency_case(config: dict[str, Any]):
         ]
 
 
+# 根据配置决定规划阶段是否启用 LLM。
+def _planning_llm_client(config: dict[str, Any]) -> LLMClient | None:
+    llm_config = config.get("llm", {})
+    if not llm_config.get("enabled", False) or not llm_config.get("use_for_planning", False):
+        return None
+    return LLMClient(config=llm_config, evidence_config=config.get("evidence", {}))
+
+
+# 构造验证阶段使用的 LLM 客户端；未启用在线 provider 时客户端会返回 unavailable。
+def _verification_llm_client(config: dict[str, Any]) -> LLMClient:
+    llm_config = config.get("llm", {})
+    if not llm_config.get("use_for_verification", True):
+        return LLMClient(config={"enabled": False}, evidence_config=config.get("evidence", {}))
+    return LLMClient(config=llm_config, evidence_config=config.get("evidence", {}))
+
+
+# 按配置把最终合并后的运行配置另存为 JSON，便于复现实验。
 def _save_resolved_config_if_requested(config: dict[str, Any]) -> None:
     output_path = str(config.get("report", {}).get("save_config", "")).strip()
     if not output_path:
@@ -306,6 +342,7 @@ def _save_resolved_config_if_requested(config: dict[str, Any]) -> None:
     path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# 根据用户输入的关键字筛选需要执行的测试用例。
 def _filter_cases(cases, case_filter: str):
     """按用例名称、内部 ID、操作描述或预期结果进行朴素子串筛选。"""
 
@@ -322,6 +359,7 @@ def _filter_cases(cases, case_filter: str):
     ]
 
 
+# 将内部运行状态转换为报告中展示给人工复核的中文摘要。
 def _summary_for_status(status: str) -> str:
     """把机器状态映射为面向人工复核的中文摘要。"""
 
@@ -336,6 +374,7 @@ def _summary_for_status(status: str) -> str:
     return "离线证据不足，结果不确定。"
 
 
+# 汇总所有需要人工复核的判断原因，供报告列表展示和筛选。
 def _manual_review_reason(judgments) -> str:
     """汇总用例内需要人工复核的原因，供报告筛选。"""
 
@@ -347,6 +386,7 @@ def _manual_review_reason(judgments) -> str:
     return ", ".join(reasons)
 
 
+# 针对证据缺口类判断触发受限证据补采，并返回补采审计记录。
 def _collect_evidence_for_verification_gaps(judgments, case_dir: Path, config: dict[str, Any]) -> list[dict[str, Any]]:
     """对验证证据不足的目标执行受限补采，并返回可审计轨迹。"""
 
@@ -371,11 +411,13 @@ def _collect_evidence_for_verification_gaps(judgments, case_dir: Path, config: d
     return trace
 
 
+# 从配置中读取验证证据补采的最大尝试次数。
 def _max_evidence_recollection_attempts(config: dict[str, Any]) -> int:
     recollection_config = config.get("verification", {}).get("evidence_recollection", {})
     return int(recollection_config.get("max_attempts", 0) or 0)
 
 
+# 把外部传入的用例参数覆盖到每条用例的 parameters 字段。
 def _apply_case_param_overrides(cases, case_params: dict[str, Any]) -> list[Any]:
     """把命令行用例业务参数覆盖到每条用例的 parameters 字段。"""
 
@@ -384,6 +426,7 @@ def _apply_case_param_overrides(cases, case_params: dict[str, Any]) -> list[Any]
     return [_replace_case_parameters(case, case_params) for case in cases]
 
 
+# 合并单条用例已有参数和配置覆盖参数，返回替换后的不可变用例对象。
 def _replace_case_parameters(case, case_params: dict[str, Any]):
     base_params = _parse_case_parameters(case.parameters)
     merged = {**base_params, **{str(key): str(value) for key, value in case_params.items()}}
@@ -393,6 +436,7 @@ def _replace_case_parameters(case, case_params: dict[str, Any]):
     return replace(case, parameters=parameters, original_fields=original_fields)
 
 
+# 解析 Excel 中的参数字段；非 JSON 内容会作为原始参数文本保留。
 def _parse_case_parameters(raw_parameters: str) -> dict[str, str]:
     text = str(raw_parameters or "").strip()
     if not text:
@@ -406,6 +450,7 @@ def _parse_case_parameters(raw_parameters: str) -> dict[str, str]:
     return {"_excel_parameters": text}
 
 
+# 将验证阶段的证据补采过程追加写入统一执行轨迹文件。
 def _append_evidence_recollection_execution_trace(
     case_dir: Path,
     recollection_trace: list[dict[str, Any]],
@@ -450,6 +495,7 @@ def _append_evidence_recollection_execution_trace(
     trace_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# 根据动作前后控件摘要更新页面状态图和页面跳转边。
 def _update_state_graph_from_actions(
     graph: StateGraph,
     case_id: str,
@@ -485,6 +531,7 @@ def _update_state_graph_from_actions(
         graph.record_edge(before_hash, result.action_id, after_hash, case_id=case_id)
 
 
+# 读取某个动作保存的控件摘要 JSON；缺失时返回空字典。
 def _read_element_summary(case_dir: Path, relative_path: str) -> dict[str, Any]:
     if not relative_path:
         return {}
@@ -494,6 +541,7 @@ def _read_element_summary(case_dir: Path, relative_path: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# 从控件摘要中提取可用于页面指纹计算的元素列表。
 def _elements_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
     elements = summary.get("elements", [])
     if isinstance(elements, list) and elements:
@@ -504,6 +552,7 @@ def _elements_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
+# 把控件摘要中的可见文本压缩成状态图页面摘要字符串。
 def _summary_text(summary: dict[str, Any]) -> str:
     visible_texts = summary.get("visible_texts", [])
     if isinstance(visible_texts, list):
@@ -511,6 +560,7 @@ def _summary_text(summary: dict[str, Any]) -> str:
     return ""
 
 
+# 为崩溃信息生成去重键，优先使用结构化 signature_id。
 def _crash_signature_key(crash: Any) -> str:
     if isinstance(crash, dict):
         signature_id = str(crash.get("signature_id", "")).strip()
@@ -520,6 +570,7 @@ def _crash_signature_key(crash: Any) -> str:
     return str(crash)
 
 
+# 从崩溃信息中提取稳定签名 ID；非结构化崩溃返回空串。
 def _crash_signature_id(crash: Any) -> str:
     if isinstance(crash, dict):
         return str(crash.get("signature_id", ""))

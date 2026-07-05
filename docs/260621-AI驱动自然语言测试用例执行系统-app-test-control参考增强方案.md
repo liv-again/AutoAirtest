@@ -13,33 +13,33 @@
 
 核心设计结论如下：
 
-| 主题 | 决策 |
-| --- | --- |
-| 被测设备 | 仅支持 Android 真机；MVP 不考虑模拟器、iOS、多设备并发 |
-| 操作执行 | Airtest 负责设备连接、截图、点击、滑动、输入；Poco 负责控件树、元素查询、元素状态读取 |
-| 用例来源 | Excel 工作簿 `test-cases.xlsx`，sheet 为 `需求测试报告` |
+| 主题    | 决策                                                                                                                            |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 被测设备  | 仅支持 Android 真机；MVP 不考虑模拟器、iOS、多设备并发                                                                                           |
+| 操作执行  | Airtest 负责设备连接、截图、点击、滑动、输入；Poco 负责控件树、元素查询、元素状态读取                                                                             |
+| 用例来源  | Excel 工作簿 `test-cases.xlsx`，sheet 为 `需求测试报告`                                                                                  |
 | 智能体形态 | Workflow 主导整体流程；Planning Agent 负责自然语言理解；Execution Agent 在受限纠错循环中处理执行期歧义；Verification Agent 辅助证据解释；工具层封装为 MCP 兼容接口，但第一版可本地进程调用 |
-| 元素定位 | 执行动作阶段使用三级定位漏斗：Poco 语义匹配优先，截图+控件树联合定位次之，图像/OCR/坐标兜底 |
-| 结果验证 | 验证阶段采用 Rule Engine 优先、Verification Agent 辅助解释、人工最终复核的分工 |
-| 截图策略 | 每条用例必须保存截图留痕；截图是审计证据和人工复核依据，不只是失败时才保存 |
-| 数据正确性 | LLM 可做初步判断和摘要，但行情数据是否正确最终交由人工根据截图判断 |
-| 纠错策略 | 按动作风险分级控制自动纠错：低风险最多 3 次，中风险最多 1 次，高风险不自动纠错 |
-| 报告输出 | 生成 HTML 报告、结构化 JSON 结果、截图和元素摘要证据包；可选回写 Excel 的 `测试结果` 与 `备注` |
+| 元素定位  | 执行动作阶段使用三级定位漏斗：Poco 语义匹配优先，截图+控件树联合定位次之，图像/OCR/坐标兜底                                                                           |
+| 结果验证  | 验证阶段采用 Rule Engine 优先、Verification Agent 辅助解释、人工最终复核的分工                                                                       |
+| 截图策略  | 每条用例必须保存截图留痕；截图是审计证据和人工复核依据，不只是失败时才保存                                                                                         |
+| 数据正确性 | LLM 可做初步判断和摘要，但行情数据是否正确最终交由人工根据截图判断                                                                                           |
+| 纠错策略  | 按动作风险分级控制自动纠错：低风险最多 3 次，中风险最多 1 次，高风险不自动纠错                                                                                    |
+| 报告输出  | 生成 HTML 报告、结构化 JSON 结果、截图和元素摘要证据包；可选回写 Excel 的 `测试结果` 与 `备注`                                                                  |
 
 ### 1.1 参考 app-test-control 的针对性吸收
 
 `app-test-control` 的价值不在于某个单点工具，而在于把移动测试拆成可复用能力面：MCP 工具、Skill 工作流、session 证据目录、状态图、崩溃签名和环境自检。结合本项目当前定位，应做“思想吸收 + 本地 Python 化落地”，不应直接改成 TypeScript 多 MCP 平台。
 
-| 参考点 | 是否吸收 | 在本方案中的落点 |
-| --- | --- | --- |
-| `devtest / qa / minimize / smart-qa` 场景化 Skill | 部分吸收 | 保留本项目 Excel 用例执行主线；新增“场景化工作流视图”，把开发自测、用例回归、探索 QA、复现路径精简作为不同入口，而不是让单一 Workflow 承担所有目标 |
-| session 目录和 `steps.jsonl / crashes.jsonl / state-graph.json` | 吸收 | 在现有 `runs/<timestamp>/cases/` 外增加 Test Session 元数据、追加式步骤日志、崩溃日志和可选状态图 |
-| `log-mcp` 的 crash/ANR/tombstone 思路 | 吸收 | 增加 Log Collector / Crash Analyzer 工具边界；MVP 先做 Android logcat 关键字和时间窗口，不进入 iOS |
-| `analyzer-mcp` 的 crash signature、dedup、ddmin 路径精简 | 分阶段吸收 | MVP 记录 crash signature 与原始复现路径；路径精简放到后续演进，不阻塞前两条真机用例闭环 |
-| `ui-mcp` 层级优先、截图兜底 | 已基本一致 | 保留 Poco 语义定位优先；补充“页面级层级失效标记”，避免 Flutter/WebView 类页面每步重复 dump 浪费时间 |
-| `doctor / setup / prewarm` 自检体验 | 吸收 | 增加 `doctor` 命令建议，用于检查 Python 依赖、ADB、设备、App 包名、Airtest/Poco、输出目录和配置 |
-| 多客户端 MCP 接入 | 暂不进入 MVP | 本项目先保持本地 Python CLI；MCP Server 作为 M5/M6 后的适配层，不影响核心数据模型 |
-| iOS Simulator 支持 | 不吸收进 MVP | 证券 App 第一阶段限定 Android 真机；iOS 只在长期演进保留可能性 |
+| 参考点                                                          | 是否吸收     | 在本方案中的落点                                                                             |
+| ------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------ |
+| `devtest / qa / minimize / smart-qa` 场景化 Skill               | 部分吸收     | 保留本项目 Excel 用例执行主线；新增“场景化工作流视图”，把开发自测、用例回归、探索 QA、复现路径精简作为不同入口，而不是让单一 Workflow 承担所有目标 |
+| session 目录和 `steps.jsonl / crashes.jsonl / state-graph.json` | 吸收       | 在现有 `runs/<timestamp>/cases/` 外增加 Test Session 元数据、追加式步骤日志、崩溃日志和可选状态图                |
+| `log-mcp` 的 crash/ANR/tombstone 思路                           | 吸收       | 增加 Log Collector / Crash Analyzer 工具边界；MVP 先做 Android logcat 关键字和时间窗口，不进入 iOS        |
+| `analyzer-mcp` 的 crash signature、dedup、ddmin 路径精简            | 分阶段吸收    | MVP 记录 crash signature 与原始复现路径；路径精简放到后续演进，不阻塞前两条真机用例闭环                               |
+| `ui-mcp` 层级优先、截图兜底                                           | 已基本一致    | 保留 Poco 语义定位优先；补充“页面级层级失效标记”，避免 Flutter/WebView 类页面每步重复 dump 浪费时间                    |
+| `doctor / setup / prewarm` 自检体验                              | 吸收       | 增加 `doctor` 命令建议，用于检查 Python 依赖、ADB、设备、App 包名、Airtest/Poco、输出目录和配置                   |
+| 多客户端 MCP 接入                                                  | 暂不进入 MVP | 本项目先保持本地 Python CLI；MCP Server 作为 M5/M6 后的适配层，不影响核心数据模型                              |
+| iOS Simulator 支持                                             | 不吸收进 MVP | 证券 App 第一阶段限定 Android 真机；iOS 只在长期演进保留可能性                                             |
 
 因此，本增强方案的关键变化是：把原先“逐条 Excel 用例执行”的设计，扩展成“Test Session + 多工作流入口 + 崩溃与状态证据”的设计，但仍维持 MVP 的受控执行边界。
 
@@ -83,42 +83,42 @@
 
 `test-cases.xlsx` 当前只有一个 sheet：
 
-| 属性 | 值 |
-| --- | --- |
+| 属性       | 值        |
+| -------- | -------- |
 | Sheet 名称 | `需求测试报告` |
-| 行数 | 8 行，含表头 |
-| 列数 | 13 列 |
-| 用例数 | 7 条 |
+| 行数       | 8 行，含表头  |
+| 列数       | 13 列     |
+| 用例数      | 7 条      |
 
 字段如下：
 
-| 字段 | 含义 | MVP 用法 |
-| --- | --- | --- |
-| 业务模块 | 一级业务域，例如股指、A股、自选 | 与功能模块共同形成模块路径；可与操作描述中的目标页面路径相互验证，并由 Skills 提供路径、别名和入口规则指导 |
-| 功能模块 | 二级模块，例如国内指数、沪深京、个股详情页 | 与业务模块共同约束目标页面路径；用于校验 Planner 是否误解操作描述 |
-| 功能项 | 页面或功能区域，例如一级宫格页面、大盘指数 | 用于推断当前页面区域 |
-| 测试目的 | 数据校验、跳转校验、默认展示校验、页面展示 | 用于推断验证策略 |
-| TC_用例名称 | 测试用例唯一可读名称 | 用作测试结果主标题 |
-| 优先级 | high、middle | 用于执行排序和报告筛选 |
-| 步骤名称 | 当前为空 | 保留，第一版不依赖 |
-| 前置条件 | 例如“有行业板块的券商” | 作为人工准备项或执行前检查项 |
-| 操作描述 | 由目标页面路径、操作方法、操作对象组成的自然语言说明 | Planner 的主要输入；必须与业务模块、功能模块、功能项交叉验证 |
-| 参数 | Excel 中的用例参数，当前多为空或 null | 作为用例级默认参数；运行时命令行参数优先级更高 |
-| 预期结果 | 自然语言断言 | Verifier 的主要输入 |
-| 测试结果 | 当前为空 | 可选回写 |
-| 备注 | 当前为空 | 可选回写失败原因和复核说明 |
+| 字段      | 含义                         | MVP 用法                                                    |
+| ------- | -------------------------- | --------------------------------------------------------- |
+| 业务模块    | 一级业务域，例如股指、A股、自选           | 与功能模块共同形成模块路径；可与操作描述中的目标页面路径相互验证，并由 Skills 提供路径、别名和入口规则指导 |
+| 功能模块    | 二级模块，例如国内指数、沪深京、个股详情页      | 与业务模块共同约束目标页面路径；用于校验 Planner 是否误解操作描述                     |
+| 功能项     | 页面或功能区域，例如一级宫格页面、大盘指数      | 用于推断当前页面区域                                                |
+| 测试目的    | 数据校验、跳转校验、默认展示校验、页面展示      | 用于推断验证策略                                                  |
+| TC_用例名称 | 测试用例唯一可读名称                 | 用作测试结果主标题                                                 |
+| 优先级     | high、middle                | 用于执行排序和报告筛选                                               |
+| 步骤名称    | 当前为空                       | 保留，第一版不依赖                                                 |
+| 前置条件    | 例如“有行业板块的券商”               | 作为人工准备项或执行前检查项                                            |
+| 操作描述    | 由目标页面路径、操作方法、操作对象组成的自然语言说明 | Planner 的主要输入；必须与业务模块、功能模块、功能项交叉验证                        |
+| 参数      | Excel 中的用例参数，当前多为空或 null   | 作为用例级默认参数；运行时命令行参数优先级更高                                   |
+| 预期结果    | 自然语言断言                     | Verifier 的主要输入                                            |
+| 测试结果    | 当前为空                       | 可选回写                                                      |
+| 备注      | 当前为空                       | 可选回写失败原因和复核说明                                             |
 
 ### 3.2 当前用例清单与验证类型
 
-| 序号 | 用例名称 | 操作概要 | 预期结果概要 | 验证类型 |
-| --- | --- | --- | --- | --- |
-| 1 | TC_国内指数模块数据正确 | 行情-股指：查看国内指数模块数据显示 | 科创综指排第四；指数顺序正确；数据展示正确；与个股行情页一致 | 顺序自动初判 + 数据人工复核 |
-| 2 | TC_国内指数宫格跳转正常 | 行情-股指-国内指数：点击六宫格中的科创综指 | 跳转到该指数行情分时页面 | 页面跳转自动初判 |
-| 3 | TC_国内指数更多跳转正常 | 行情-股指-国内指数：点击右侧“更多”按钮 | 跳转至国内指数列表页；科创综指排第四 | 跳转和顺序自动初判 |
-| 4 | TC_大盘指数数据显示正确 | 行情-A股-沪深京：查看大盘指数模块数据显示 | 科创综指排第四；数据两端一致；红涨绿跌黑平 | 顺序自动初判 + 数据/颜色人工复核 |
-| 5 | TC_个股详情页科创综指展示正常 | A股分时页面底部操作栏点击底部指数 | 弹出指数分时图弹框；选中上证指数；含行业板块时指数顺序正确 | 弹框和顺序自动初判 |
-| 6 | TC_个股详情页科创综指展示正常 | 进入基金/B股/新三板/债券等详情页，点击底部指数 | 弹出指数分时图弹框；无行业板块时指数顺序正确 | 弹框和顺序自动初判 |
-| 7 | TC_自选顶部指数展示正常 | 沪深A股个股详情页，点击自选顶部指数 | 弹出指数分时图弹框；科创综指排第四；指数顺序正确 | 弹框和顺序自动初判 |
+| 序号  | 用例名称             | 操作概要                      | 预期结果概要                         | 验证类型               |
+| --- | ---------------- | ------------------------- | ------------------------------ | ------------------ |
+| 1   | TC_国内指数模块数据正确    | 行情-股指：查看国内指数模块数据显示        | 科创综指排第四；指数顺序正确；数据展示正确；与个股行情页一致 | 顺序自动初判 + 数据人工复核    |
+| 2   | TC_国内指数宫格跳转正常    | 行情-股指-国内指数：点击六宫格中的科创综指    | 跳转到该指数行情分时页面                   | 页面跳转自动初判           |
+| 3   | TC_国内指数更多跳转正常    | 行情-股指-国内指数：点击右侧“更多”按钮     | 跳转至国内指数列表页；科创综指排第四             | 跳转和顺序自动初判          |
+| 4   | TC_大盘指数数据显示正确    | 行情-A股-沪深京：查看大盘指数模块数据显示    | 科创综指排第四；数据两端一致；红涨绿跌黑平          | 顺序自动初判 + 数据/颜色人工复核 |
+| 5   | TC_个股详情页科创综指展示正常 | A股分时页面底部操作栏点击底部指数         | 弹出指数分时图弹框；选中上证指数；含行业板块时指数顺序正确  | 弹框和顺序自动初判          |
+| 6   | TC_个股详情页科创综指展示正常 | 进入基金/B股/新三板/债券等详情页，点击底部指数 | 弹出指数分时图弹框；无行业板块时指数顺序正确         | 弹框和顺序自动初判          |
+| 7   | TC_自选顶部指数展示正常    | 沪深A股个股详情页，点击自选顶部指数        | 弹出指数分时图弹框；科创综指排第四；指数顺序正确       | 弹框和顺序自动初判          |
 
 ### 3.3 用例特征
 
@@ -144,18 +144,18 @@
 
 本文档使用以下核心术语：
 
-| 术语 | 定义 |
-| --- | --- |
-| 自然语言测试用例 | Excel 中的一行测试用例，包含操作描述和预期结果 |
-| 模块路径 | 业务模块、功能模块、功能项共同暗示的业务入口和页面区域 |
-| 操作描述 | 用例中描述测试人员应如何操作 App 的自然语言文本，由目标页面路径、操作方法、操作对象组成 |
-| 预期结果 | 用例中描述操作后应观察到什么的自然语言文本 |
-| 执行计划 | LLM 将自然语言用例解析出的结构化动作和验证目标 |
-| 验证目标 | 从预期结果拆出的单条可检查声明 |
-| 界面证据 | 控件树、元素文本、元素位置、元素状态、OCR 文本、截图等证据 |
-| 截图证据 | 每条用例强制保存的屏幕截图，用于审计和人工复核 |
-| 初步判断 | 系统基于界面证据生成的自动判断，不等于人工最终结论 |
-| 人工复核 | 测试人员基于截图和报告确认结果是否最终通过 |
+| 术语       | 定义                                             |
+| -------- | ---------------------------------------------- |
+| 自然语言测试用例 | Excel 中的一行测试用例，包含操作描述和预期结果                     |
+| 模块路径     | 业务模块、功能模块、功能项共同暗示的业务入口和页面区域                    |
+| 操作描述     | 用例中描述测试人员应如何操作 App 的自然语言文本，由目标页面路径、操作方法、操作对象组成 |
+| 预期结果     | 用例中描述操作后应观察到什么的自然语言文本                          |
+| 执行计划     | LLM 将自然语言用例解析出的结构化动作和验证目标                      |
+| 验证目标     | 从预期结果拆出的单条可检查声明                                |
+| 界面证据     | 控件树、元素文本、元素位置、元素状态、OCR 文本、截图等证据                |
+| 截图证据     | 每条用例强制保存的屏幕截图，用于审计和人工复核                        |
+| 初步判断     | 系统基于界面证据生成的自动判断，不等于人工最终结论                      |
+| 人工复核     | 测试人员基于截图和报告确认结果是否最终通过                          |
 
 边界说明：
 
@@ -209,26 +209,26 @@
 
 ### 5.2 组件职责
 
-| 组件 | 职责 | 是否调用 LLM |
-| --- | --- | --- |
-| Orchestrator / Workflow | 串联全流程，控制用例执行顺序、超时、失败后是否继续，并保证审计记录完整 | 否 |
-| Excel Loader | 读取 Excel、标准化字段、生成用例对象 | 否 |
-| Planning Agent | 将操作描述和预期结果解析为执行计划，处理自然语言差异、导航别名、目标归一、风险分类，并输出解释依据 | 是 |
-| Execution Agent | 在 Workflow 限定的动作和风险预算内处理执行期歧义、候选元素选择、可恢复误操作识别和纠错建议 | 是，主要用于执行期歧义消解和纠错解释 |
-| Rule Engine | 对元素顺序、文本存在、弹框展示等确定性目标进行规则验证 | 否 |
-| Verification Agent | 解释证据缺口、证据冲突、UI 文案差异和人工复核原因，不替代规则引擎和人工最终裁决 | 是 |
-| Reporter | 汇总结果、证据、执行轨迹、复核原因和复核建议，生成 HTML 报告 | 可选 |
-| Skill Registry | 管理证券 App 导航别名、页面路径、指数顺序、风险规则、验证规则等可复用能力包 | 否 |
-| Guardrails / Risk Policy | 按动作风险等级控制自动执行、纠错预算和人工确认边界 | 否 |
-| Airtest Adapter | 封装 connect、start_app、snapshot、touch、swipe、text、keyevent | 否 |
-| Poco Adapter | 封装 dump、query、exists、click、get_text、get_bounds、get_attr | 否 |
-| OCR Adapter | 从截图提取文字和坐标，用于 Poco 不可见文本兜底 | 否 |
-| Evidence Store | 保存截图、结构化元素摘要、执行计划、执行轨迹、计划补充、判断结果和日志；完整控件树仅作为调试可选项 | 否 |
-| Log Collector | 按 Test Session 和动作时间窗口采集 logcat、ANR 线索和关键运行日志 | 否 |
-| Crash Analyzer | 从 logcat/ANR/native crash 文本提取 Crash Signature、崩溃摘要和原始复现路径 | 否 |
-| State Graph Store | 保存可选页面指纹、已访问元素和页面转移关系，用于后续探索 QA 与循环规避 | 否 |
-| Environment Doctor | 运行前检查 Python 依赖、ADB、设备、App 包名、Airtest/Poco 可用性和输出目录权限 | 否 |
-| LLM Client | 统一封装模型调用、JSON 校验、重试、敏感信息脱敏 | 否，作为基础设施 |
+| 组件                       | 职责                                                         | 是否调用 LLM           |
+| ------------------------ | ---------------------------------------------------------- | ------------------ |
+| Orchestrator / Workflow  | 串联全流程，控制用例执行顺序、超时、失败后是否继续，并保证审计记录完整                        | 否                  |
+| Excel Loader             | 读取 Excel、标准化字段、生成用例对象                                      | 否                  |
+| Planning Agent           | 将操作描述和预期结果解析为执行计划，处理自然语言差异、导航别名、目标归一、风险分类，并输出解释依据          | 是                  |
+| Execution Agent          | 在 Workflow 限定的动作和风险预算内处理执行期歧义、候选元素选择、可恢复误操作识别和纠错建议         | 是，主要用于执行期歧义消解和纠错解释 |
+| Rule Engine              | 对元素顺序、文本存在、弹框展示等确定性目标进行规则验证                                | 否                  |
+| Verification Agent       | 解释证据缺口、证据冲突、UI 文案差异和人工复核原因，不替代规则引擎和人工最终裁决                  | 是                  |
+| Reporter                 | 汇总结果、证据、执行轨迹、复核原因和复核建议，生成 HTML 报告                          | 可选                 |
+| Skill Registry           | 管理证券 App 导航别名、页面路径、指数顺序、风险规则、验证规则等可复用能力包                   | 否                  |
+| Guardrails / Risk Policy | 按动作风险等级控制自动执行、纠错预算和人工确认边界                                  | 否                  |
+| Airtest Adapter          | 封装 connect、start_app、snapshot、touch、swipe、text、keyevent    | 否                  |
+| Poco Adapter             | 封装 dump、query、exists、click、get_text、get_bounds、get_attr    | 否                  |
+| OCR Adapter              | 从截图提取文字和坐标，用于 Poco 不可见文本兜底                                 | 否                  |
+| Evidence Store           | 保存截图、结构化元素摘要、执行计划、执行轨迹、计划补充、判断结果和日志；完整控件树仅作为调试可选项          | 否                  |
+| Log Collector            | 按 Test Session 和动作时间窗口采集 logcat、ANR 线索和关键运行日志              | 否                  |
+| Crash Analyzer           | 从 logcat/ANR/native crash 文本提取 Crash Signature、崩溃摘要和原始复现路径 | 否                  |
+| State Graph Store        | 保存可选页面指纹、已访问元素和页面转移关系，用于后续探索 QA 与循环规避                      | 否                  |
+| Environment Doctor       | 运行前检查 Python 依赖、ADB、设备、App 包名、Airtest/Poco 可用性和输出目录权限      | 否                  |
+| LLM Client               | 统一封装模型调用、JSON 校验、重试、敏感信息脱敏                                 | 否，作为基础设施           |
 
 ### 5.3 MCP 与本地实现关系
 
@@ -258,14 +258,14 @@
 
 参考 `app-test-control` 后，建议把“同一套工具底座服务不同测试场景”作为后续架构目标，但第一阶段只实现其中最窄、最可控的一条。各入口的边界如下：
 
-| 工作流入口 | 触发方式 | 输入 | 输出 | 阶段 |
-| --- | --- | --- | --- | --- |
-| Excel Case Run | `python -m autoairtest run --excel ...` | Excel 自然语言测试用例 | Test Session、逐用例证据、HTML 报告、可选 Excel 回写 | MVP |
-| Focused Smoke | `--case-filter` 或指定 1 到 2 条用例 | 少量跳转/展示类用例 | 快速验证 Airtest/Poco/报告链路 | MVP |
-| DevTest | 后续 `devtest --scope <feature>` 或 Agent Skill | 最近代码改动或指定功能范围 | 窄范围自测报告 | 后续 |
-| Exploratory QA | 后续 `qa --max-steps ...` | App 包名、探索预算、风险 blocklist | 状态图、覆盖统计、崩溃列表 | 后续 |
-| Repro Minimize | 后续 `minimize <session> --crash <id>` | 已有 crash 的 Test Session | 经 replay 验证的最小复现路径 | 后续 |
-| Smart QA | 后续读取 PRD/路由/页面信号 | 业务流候选和用户确认 | 业务感知测试计划，再交给 Case Run 或 DevTest 执行 | 后续 |
+| 工作流入口          | 触发方式                                         | 输入                       | 输出                                     | 阶段  |
+| -------------- | -------------------------------------------- | ------------------------ | -------------------------------------- | --- |
+| Excel Case Run | `python -m autoairtest run --excel ...`      | Excel 自然语言测试用例           | Test Session、逐用例证据、HTML 报告、可选 Excel 回写 | MVP |
+| Focused Smoke  | `--case-filter` 或指定 1 到 2 条用例                | 少量跳转/展示类用例               | 快速验证 Airtest/Poco/报告链路                 | MVP |
+| DevTest        | 后续 `devtest --scope <feature>` 或 Agent Skill | 最近代码改动或指定功能范围            | 窄范围自测报告                                | 后续  |
+| Exploratory QA | 后续 `qa --max-steps ...`                      | App 包名、探索预算、风险 blocklist | 状态图、覆盖统计、崩溃列表                          | 后续  |
+| Repro Minimize | 后续 `minimize <session> --crash <id>`         | 已有 crash 的 Test Session  | 经 replay 验证的最小复现路径                     | 后续  |
+| Smart QA       | 后续读取 PRD/路由/页面信号                             | 业务流候选和用户确认               | 业务感知测试计划，再交给 Case Run 或 DevTest 执行     | 后续  |
 
 这些入口共享同一套 Tool Layer、Evidence Store、Log Collector、Crash Analyzer 和 Reporter。区别只在“谁生成计划、计划是否需要用户确认、是否允许探索”。MVP 不允许自由探索式 Agent 绕过 ExecutionPlan、Risk Policy 和 Guardrails。
 
@@ -462,11 +462,11 @@ ExecutionPlan 是原始计划，执行阶段不得覆盖。真实执行过程必
 
 执行期纠错预算按动作风险等级控制：
 
-| 动作风险等级 | 自动纠错预算 | 处理策略 |
-| --- | --- | --- |
-| low | 最多 3 次 | 允许返回、重新定位、刷新证据、切换别名等可恢复纠错 |
-| medium | 最多 1 次 | 允许有限纠错，必须保存更强证据和原因 |
-| high | 0 次 | 阻塞或要求人工确认 |
+| 动作风险等级 | 自动纠错预算 | 处理策略                      |
+| ------ | ------ | ------------------------- |
+| low    | 最多 3 次 | 允许返回、重新定位、刷新证据、切换别名等可恢复纠错 |
+| medium | 最多 1 次 | 允许有限纠错，必须保存更强证据和原因        |
+| high   | 0 次    | 阻塞或要求人工确认                 |
 
 ### 6.5 VerificationGoal
 
@@ -507,25 +507,25 @@ ExecutionPlan 是原始计划，执行阶段不得覆盖。真实执行过程必
 
 `preliminary_status` 可取值：
 
-| 值 | 含义 |
-| --- | --- |
-| `pass` | 自动证据支持该验证目标通过 |
-| `fail` | 自动证据支持该验证目标不通过 |
-| `uncertain` | 证据不足或 LLM 置信度不足 |
+| 值                 | 含义                                      |
+| ----------------- | --------------------------------------- |
+| `pass`            | 自动证据支持该验证目标通过                           |
+| `fail`            | 自动证据支持该验证目标不通过                          |
+| `uncertain`       | 证据不足或 LLM 置信度不足                         |
 | `manual_required` | 该目标需要人工复核，例如数据正确性、颜色规则、证据缺口、冲突证据或低置信度解释 |
-| `blocked` | 前置动作失败，未能进入验证阶段 |
+| `blocked`         | 前置动作失败，未能进入验证阶段                         |
 
 `manual_review_reason` 建议取值：
 
-| 值 | 含义 |
-| --- | --- |
-| `data_correctness` | 行情数据正确性缺少外部 Oracle |
-| `color_rule` | 颜色规则受主题、业务口径或视觉识别影响 |
-| `verification_evidence_gap` | 证据不完整或出现非预期元素 |
-| `ambiguous_business_rule` | 业务规则存在歧义 |
-| `conflicting_evidence` | Poco、OCR、截图等证据冲突 |
+| 值                               | 含义                            |
+| ------------------------------- | ----------------------------- |
+| `data_correctness`              | 行情数据正确性缺少外部 Oracle            |
+| `color_rule`                    | 颜色规则受主题、业务口径或视觉识别影响           |
+| `verification_evidence_gap`     | 证据不完整或出现非预期元素                 |
+| `ambiguous_business_rule`       | 业务规则存在歧义                      |
+| `conflicting_evidence`          | Poco、OCR、截图等证据冲突              |
 | `low_confidence_interpretation` | Planning 或 Execution 的解释置信度不足 |
-| `high_risk_action_confirmation` | 高风险动作必须人工确认 |
+| `high_risk_action_confirmation` | 高风险动作必须人工确认                   |
 
 `basis` 是给人看的说明；`structured_details` 是给程序、报告筛选、统计和后续评估使用的结构化字段。机器逻辑不应依赖解析 `basis` 文本。
 
@@ -546,13 +546,13 @@ ExecutionPlan 是原始计划，执行阶段不得覆盖。真实执行过程必
 
 `run_status` 的汇总规则：
 
-| 条件 | run_status |
-| --- | --- |
-| 任一关键动作无法完成 | `blocked` |
-| 任一非人工验证目标初判失败 | `fail_preliminary` |
-| 存在数据正确性、颜色规则、证据缺口、冲突证据、低置信度解释等人工复核目标 | `manual_required` |
-| 所有目标自动初判通过且无需人工复核 | `pass_preliminary` |
-| 证据不足但流程执行完成 | `uncertain` |
+| 条件                                   | run_status         |
+| ------------------------------------ | ------------------ |
+| 任一关键动作无法完成                           | `blocked`          |
+| 任一非人工验证目标初判失败                        | `fail_preliminary` |
+| 存在数据正确性、颜色规则、证据缺口、冲突证据、低置信度解释等人工复核目标 | `manual_required`  |
+| 所有目标自动初判通过且无需人工复核                    | `pass_preliminary` |
+| 证据不足但流程执行完成                          | `uncertain`        |
 
 ### 6.8 TestSession
 
@@ -682,15 +682,15 @@ MVP 中 StateGraph 只作为可选诊断数据：Workflow 仍按 ExecutionPlan �
 
 执行每条用例前需要确认：
 
-| 检查项 | 通过条件 | 失败处理 |
-| --- | --- | --- |
-| 设备在线 | `adb devices` 可见且状态为 device | 停止本轮执行 |
-| 屏幕可操作 | Airtest 可截图，屏幕未锁定 | 尝试唤醒一次，失败则 blocked |
-| App 可用 | package 存在，可启动或已在前台 | 启动失败则 blocked |
-| Poco 可用 | 可 dump 控件树 | 降级为截图/OCR执行，但报告标注风险 |
-| 登录状态 | 当前页面可进入行情相关路径 | MVP 可人工准备；检测失败则提示人工处理 |
-| logcat 可用 | 能执行基础 logcat 命令或明确标记不可用 | 不阻断用例执行，但报告标注崩溃监测能力缺失 |
-| 输出目录可写 | 能创建 TestSession 和 case 目录 | 停止本轮执行 |
+| 检查项       | 通过条件                        | 失败处理                  |
+| --------- | --------------------------- | --------------------- |
+| 设备在线      | `adb devices` 可见且状态为 device | 停止本轮执行                |
+| 屏幕可操作     | Airtest 可截图，屏幕未锁定           | 尝试唤醒一次，失败则 blocked    |
+| App 可用    | package 存在，可启动或已在前台         | 启动失败则 blocked         |
+| Poco 可用   | 可 dump 控件树                  | 降级为截图/OCR执行，但报告标注风险   |
+| 登录状态      | 当前页面可进入行情相关路径               | MVP 可人工准备；检测失败则提示人工处理 |
+| logcat 可用 | 能执行基础 logcat 命令或明确标记不可用     | 不阻断用例执行，但报告标注崩溃监测能力缺失 |
+| 输出目录可写    | 能创建 TestSession 和 case 目录   | 停止本轮执行                |
 
 登录状态不建议第一版自动处理。证券 App 常包含隐私、验证码、手势、交易权限等流程，自动登录会扩大风险面。
 
@@ -740,40 +740,40 @@ Planner 对关键解释必须输出 InterpretationRationale，包括：
 
 ### 8.3 操作描述解析规则
 
-| 输入形态 | 解析规则 |
-| --- | --- |
-| `行情-股指` | 拆成导航路径：行情页 -> 股指区域 |
-| `行情-股指-国内指数` | 拆成三级路径：行情页 -> 股指 -> 国内指数 |
-| `点击六宫格中的科创综指` | 目标是文本为科创综指的宫格项，限定在国内指数宫格区域 |
-| `点击右侧“更多”按钮` | 目标是更多按钮，位置约束为当前模块右侧 |
-| `底部操作栏-点击底部指数` | 目标是底部操作栏里的指数入口 |
-| `查看...数据显示` | 不产生点击动作，只产生页面进入或停留后的验证目标 |
-| `自选` | 通过导航别名 Skill 归一到当前 UI 的可见入口，例如 `我的自选`；必须记录 InterpretationRationale |
+| 输入形态           | 解析规则                                                               |
+| -------------- | ------------------------------------------------------------------ |
+| `行情-股指`        | 拆成导航路径：行情页 -> 股指区域                                                 |
+| `行情-股指-国内指数`   | 拆成三级路径：行情页 -> 股指 -> 国内指数                                           |
+| `点击六宫格中的科创综指`  | 目标是文本为科创综指的宫格项，限定在国内指数宫格区域                                         |
+| `点击右侧“更多”按钮`   | 目标是更多按钮，位置约束为当前模块右侧                                                |
+| `底部操作栏-点击底部指数` | 目标是底部操作栏里的指数入口                                                     |
+| `查看...数据显示`    | 不产生点击动作，只产生页面进入或停留后的验证目标                                           |
+| `自选`           | 通过导航别名 Skill 归一到当前 UI 的可见入口，例如 `我的自选`；必须记录 InterpretationRationale |
 
 ### 8.4 预期结果拆分规则
 
 预期结果通常包含多条声明，Planner 应拆成多个验证目标：
 
-| 预期表达 | 验证目标类型 | 自动化策略 |
-| --- | --- | --- |
-| `科创综指排在第四位` | element_order | Poco 文本和 bounds 排序优先 |
-| `展示顺序为：A、B、C、D` | element_order | Poco 同区域元素顺序优先 |
-| `跳转到...页面` | navigation | Poco 页面标题、选中 tab、关键文本 |
-| `弹出...弹框` | popup_visible | Poco 弹层容器、关键文本、截图 |
-| `选中上证指数` | selected_state | Poco selected 属性、样式类、文本区域 |
-| `数据展示正确` | data_correctness | 截图留痕，人工复核 |
-| `两端/自营对比一致` | data_consistency | 截图留痕，人工复核 |
-| `红涨绿跌黑平` | color_rule | 截图留痕，LLM/像素初判，人工复核 |
+| 预期表达            | 验证目标类型           | 自动化策略                     |
+| --------------- | ---------------- | ------------------------- |
+| `科创综指排在第四位`     | element_order    | Poco 文本和 bounds 排序优先      |
+| `展示顺序为：A、B、C、D` | element_order    | Poco 同区域元素顺序优先            |
+| `跳转到...页面`      | navigation       | Poco 页面标题、选中 tab、关键文本     |
+| `弹出...弹框`       | popup_visible    | Poco 弹层容器、关键文本、截图         |
+| `选中上证指数`        | selected_state   | Poco selected 属性、样式类、文本区域 |
+| `数据展示正确`        | data_correctness | 截图留痕，人工复核                 |
+| `两端/自营对比一致`     | data_consistency | 截图留痕，人工复核                 |
+| `红涨绿跌黑平`        | color_rule       | 截图留痕，LLM/像素初判，人工复核        |
 
 ### 8.5 动作风险分类规则
 
 Planner 必须为每个 PlanAction 标注 `action_risk_level`。
 
-| 风险等级 | 示例 | 自动化策略 |
-| --- | --- | --- |
-| low | 页面跳转、切 tab、返回、滚动、打开/关闭弹框 | 允许 Execution Agent 在预算内自动纠错 |
-| medium | 输入搜索词、切换筛选条件、切换市场、进入详情页 | 允许最多一次自动纠错，并保存更强证据 |
-| high | 交易、下单、登录退出、账户设置、添加/删除自选、确认金融操作 | 不允许自动纠错，必须阻塞或人工确认 |
+| 风险等级   | 示例                             | 自动化策略                       |
+| ------ | ------------------------------ | --------------------------- |
+| low    | 页面跳转、切 tab、返回、滚动、打开/关闭弹框       | 允许 Execution Agent 在预算内自动纠错 |
+| medium | 输入搜索词、切换筛选条件、切换市场、进入详情页        | 允许最多一次自动纠错，并保存更强证据          |
+| high   | 交易、下单、登录退出、账户设置、添加/删除自选、确认金融操作 | 不允许自动纠错，必须阻塞或人工确认           |
 
 风险等级不是元素定位置信度。一个元素即使定位置信度高，只要动作本身可能影响账户、交易或持久化用户数据，就必须按高风险处理。
 
@@ -925,11 +925,11 @@ UI 证据：底部 tab 存在“我的自选”，设置页入口存在“自选
 
 第一版只需要覆盖 Android logcat 的常见模式：
 
-| 类型 | 关键线索 |
-| --- | --- |
-| Java crash | `FATAL EXCEPTION`、`AndroidRuntime`、异常类和 top frames |
-| ANR | `ANR in`、进程名、reason |
-| Native crash | `*** *** *** *** *** ***`、signal、tombstone 线索 |
+| 类型           | 关键线索                                               |
+| ------------ | -------------------------------------------------- |
+| Java crash   | `FATAL EXCEPTION`、`AndroidRuntime`、异常类和 top frames |
+| ANR          | `ANR in`、进程名、reason                                |
+| Native crash | `*** *** *** *** *** ***`、signal、tombstone 线索      |
 
 logcat 噪音不能直接导致用例失败。只有匹配到可归因到被测包名或当前时间窗口的崩溃/ANR，才记录为结构化 crash；否则作为 warning 写入报告。
 
@@ -1014,13 +1014,13 @@ logcat 噪音不能直接导致用例失败。只有匹配到可归因到被测�
 
 顺序验证结果分类：
 
-| 情况 | 示例 | 处理 |
-| --- | --- | --- |
-| 证据完整且顺序正确 | 期望 A-B-C-D，证据 A-B-C-D | `pass` |
-| 证据完整但顺序错误 | 期望 A-B-C-D，证据 A-C-B-D | `fail` |
-| 证据缺失 | 期望 A-B-C-D，证据 A-B-C | `manual_required`，原因 `verification_evidence_gap` |
-| 出现非预期元素 | 期望 A-B-C-D，证据 A-B-C-E | `manual_required`，原因 `verification_evidence_gap` |
-| 证据扩展异常 | 期望 A-B-C-D，证据 A-B-C-D-E | 默认 `manual_required`，除非 Skill Rule 明确规定通过或失败 |
+| 情况        | 示例                      | 处理                                               |
+| --------- | ----------------------- | ------------------------------------------------ |
+| 证据完整且顺序正确 | 期望 A-B-C-D，证据 A-B-C-D   | `pass`                                           |
+| 证据完整但顺序错误 | 期望 A-B-C-D，证据 A-C-B-D   | `fail`                                           |
+| 证据缺失      | 期望 A-B-C-D，证据 A-B-C     | `manual_required`，原因 `verification_evidence_gap` |
+| 出现非预期元素   | 期望 A-B-C-D，证据 A-B-C-E   | `manual_required`，原因 `verification_evidence_gap` |
+| 证据扩展异常    | 期望 A-B-C-D，证据 A-B-C-D-E | 默认 `manual_required`，除非 Skill Rule 明确规定通过或失败     |
 
 证据缺失或额外元素不应默认判失败，也不应回推给 Executor 盲目纠错。它属于验证阶段的证据解释问题，应记录 `structured_details.expected / observed / missing / unexpected`，并给出人工复核建议。
 
@@ -1351,13 +1351,13 @@ evidence:
 
 ### 13.2 结果标签
 
-| 标签 | 展示含义 |
-| --- | --- |
-| 初步通过 | 自动证据支持通过，但仍可查看截图 |
-| 初步失败 | 自动证据支持失败，需要人工确认是否为真实缺陷 |
-| 需要人工复核 | 系统已采集证据，但业务判断不能自动最终确定 |
-| 执行阻塞 | 未能进入目标页面或关键动作失败 |
-| 证据不足 | 操作完成但证据不足以支持判断 |
+| 标签     | 展示含义                   |
+| ------ | ---------------------- |
+| 初步通过   | 自动证据支持通过，但仍可查看截图       |
+| 初步失败   | 自动证据支持失败，需要人工确认是否为真实缺陷 |
+| 需要人工复核 | 系统已采集证据，但业务判断不能自动最终确定  |
+| 执行阻塞   | 未能进入目标页面或关键动作失败        |
+| 证据不足   | 操作完成但证据不足以支持判断         |
 
 报告应支持按 `manual_review_reason` 聚类查看人工复核项，例如数据正确性、颜色规则、证据缺口、冲突证据、低置信度解释和高风险动作确认。
 
@@ -1365,10 +1365,10 @@ evidence:
 
 MVP 可选回写：
 
-| Excel 列 | 回写内容 |
-| --- | --- |
-| 测试结果 | `初步通过`、`初步失败`、`需人工复核`、`执行阻塞`、`证据不足` |
-| 备注 | 报告相对路径、失败摘要、人工复核原因 |
+| Excel 列 | 回写内容                                |
+| ------- | ----------------------------------- |
+| 测试结果    | `初步通过`、`初步失败`、`需人工复核`、`执行阻塞`、`证据不足` |
+| 备注      | 报告相对路径、失败摘要、人工复核原因                  |
 
 默认不覆盖原始 Excel，生成副本：
 
@@ -1571,27 +1571,27 @@ doctor:
 
 ### 14.4 命令行参数建议
 
-| 参数 | 作用 | 覆盖配置项 |
-| --- | --- | --- |
-| `--config` | 读取已有配置文件 | 不适用 |
-| `--save-config` | 保存本次合并后的配置 | 不适用 |
-| `--excel` | 指定用例 Excel | `input.excel_path` |
-| `--sheet` | 指定 sheet | `input.sheet_name` |
-| `--case-filter` | 只执行匹配的用例 | `input.case_filter` |
-| `--app-package` | 指定被测 App 包名 | `app.package` |
-| `--app-activity` | 指定启动 Activity | `app.activity` |
-| `--adb-serial` | 指定 Android 真机 | `device.adb_serial` |
-| `--output-dir` | 指定报告和证据目录 | `report.output_dir` |
-| `--session-name` | 指定本次 Test Session 名称后缀 | `report.session_name` |
-| `doctor` | 只做环境检查，不执行用例 | 不适用 |
-| `--poco-dump-retries` | 指定 Poco dump 最大尝试次数 | `execution.retry.poco_dump_max_attempts` |
-| `--max-steps-per-case` | 限制单条用例最多动作数 | `execution.max_steps_per_case` |
-| `--correction-budget-low` | 覆盖低风险动作自动纠错次数 | `execution.correction_budget.low` |
-| `--correction-budget-medium` | 覆盖中风险动作自动纠错次数 | `execution.correction_budget.medium` |
-| `--evidence-recollection-attempts` | 覆盖验证阶段证据补采次数 | `verification.evidence_recollection.max_attempts` |
-| `--enable-state-graph` | 启用页面指纹和状态图诊断 | `execution.enable_state_graph` |
-| `--disable-log-capture` | 关闭 session 级 logcat 采集 | `logs.enable_capture` |
-| `--case-param key=value` | 覆盖单条用例中的同名业务参数 | 用例参数 |
+| 参数                                 | 作用                     | 覆盖配置项                                             |
+| ---------------------------------- | ---------------------- | ------------------------------------------------- |
+| `--config`                         | 读取已有配置文件               | 不适用                                               |
+| `--save-config`                    | 保存本次合并后的配置             | 不适用                                               |
+| `--excel`                          | 指定用例 Excel             | `input.excel_path`                                |
+| `--sheet`                          | 指定 sheet               | `input.sheet_name`                                |
+| `--case-filter`                    | 只执行匹配的用例               | `input.case_filter`                               |
+| `--app-package`                    | 指定被测 App 包名            | `app.package`                                     |
+| `--app-activity`                   | 指定启动 Activity          | `app.activity`                                    |
+| `--adb-serial`                     | 指定 Android 真机          | `device.adb_serial`                               |
+| `--output-dir`                     | 指定报告和证据目录              | `report.output_dir`                               |
+| `--session-name`                   | 指定本次 Test Session 名称后缀 | `report.session_name`                             |
+| `doctor`                           | 只做环境检查，不执行用例           | 不适用                                               |
+| `--poco-dump-retries`              | 指定 Poco dump 最大尝试次数    | `execution.retry.poco_dump_max_attempts`          |
+| `--max-steps-per-case`             | 限制单条用例最多动作数            | `execution.max_steps_per_case`                    |
+| `--correction-budget-low`          | 覆盖低风险动作自动纠错次数          | `execution.correction_budget.low`                 |
+| `--correction-budget-medium`       | 覆盖中风险动作自动纠错次数          | `execution.correction_budget.medium`              |
+| `--evidence-recollection-attempts` | 覆盖验证阶段证据补采次数           | `verification.evidence_recollection.max_attempts` |
+| `--enable-state-graph`             | 启用页面指纹和状态图诊断           | `execution.enable_state_graph`                    |
+| `--disable-log-capture`            | 关闭 session 级 logcat 采集 | `logs.enable_capture`                             |
+| `--case-param key=value`           | 覆盖单条用例中的同名业务参数         | 用例参数                                              |
 
 推荐补充命令：
 
@@ -1739,28 +1739,28 @@ Verifier 必须遵守：
 
 ## 17. 异常处理
 
-| 异常 | 识别方式 | 处理策略 | 结果 |
-| --- | --- | --- | --- |
-| 设备未连接 | ADB 无 device | 停止执行，提示连接真机 | run blocked |
-| App 启动失败 | package/activity 启动超时 | 重试一次，仍失败则停止 | run blocked |
-| Poco dump 失败 | dump 抛错或为空 | 按配置优先重试；重试仍失败后降级截图/OCR，报告标注 Poco 证据不可用 | uncertain 或 manual_required |
-| 页面未登录 | 出现登录页关键文本 | 停止当前用例，提示人工准备 | blocked |
-| logcat 不可用 | `adb logcat` 命令失败或权限异常 | 继续执行可视化用例，但报告标注 crash 监测不可用，并要求人工复核运行稳定性 | manual_required |
-| Java crash | logcat 在动作时间窗口内命中 `FATAL EXCEPTION` 且关联被测包名 | 写入 crashes.jsonl、提取 CrashSignature、保存 original_repro_path，停止当前用例 | fail_preliminary 或 blocked |
-| ANR | logcat 命中 `ANR in` 且关联被测包名 | 写入 crashes.jsonl，报告标注响应性问题，停止当前用例或按配置继续下一条 | fail_preliminary |
-| native crash | logcat 命中 native crash 标志或 tombstone 线索 | 记录 crash 线索；若能拉取 tombstone 则保存，否则标注证据缺口 | fail_preliminary 或 manual_required |
-| 元素找不到 | 三级定位均失败 | 保存截图、候选元素摘要和失败原因 | blocked |
-| 元素歧义 | 多候选置信度接近 | 根据动作风险等级和纠错预算处理；低风险可自动消歧或纠错，中高风险受限，高风险阻塞或人工确认 | uncertain、manual_required 或 blocked |
-| 执行期别名差异 | 计划目标和 UI 可见文案不一致，例如 `自选` 与 `我的自选` | 使用 Navigation Alias Skill 和当前界面证据生成 PlanAmendment，继续执行或要求人工确认 | success 或 manual_required |
-| 纠错预算耗尽 | Correction Step 次数超过风险等级预算 | 停止当前动作，保存 ExecutionTrace 和失败原因 | blocked 或 manual_required |
-| 高风险动作 | 动作涉及交易、账户、登录退出、添加/删除自选等 | 不自动执行或纠错，要求人工确认 | manual_required 或 blocked |
-| 点击无响应 | 点击后页面证据无变化 | 重试一次，仍无变化则 blocked | blocked |
-| LLM 输出非法 JSON | JSON schema 校验失败 | 重试，仍失败则 uncertain | uncertain |
-| 数据正确性目标 | 目标分类为 data_correctness | 保存证据，要求人工复核 | manual_required |
-| 顺序证据缺口 | 期望 A-B-C-D，但证据为 A-B-C、A-B-C-E 等 | 先按预算执行 Evidence Recollection；仍不完整则结构化记录 `verification_evidence_gap` | manual_required |
-| 证据冲突 | Poco、OCR、截图证据互相矛盾 | Verification Agent 解释冲突并标记人工复核原因 | manual_required |
-| 截图失败 | snapshot 抛错 | 重试一次；仍失败则停止当前用例 | blocked |
-| 状态图循环 | 启用 StateGraph 后连续回到同一 page_hash 且无新动作 | 停止探索或回到 ExecutionPlan 主线；MVP 不因状态图自动扩展新点击 | blocked 或 manual_required |
+| 异常            | 识别方式                                        | 处理策略                                                                | 结果                                  |
+| ------------- | ------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------- |
+| 设备未连接         | ADB 无 device                                | 停止执行，提示连接真机                                                         | run blocked                         |
+| App 启动失败      | package/activity 启动超时                       | 重试一次，仍失败则停止                                                         | run blocked                         |
+| Poco dump 失败  | dump 抛错或为空                                  | 按配置优先重试；重试仍失败后降级截图/OCR，报告标注 Poco 证据不可用                              | uncertain 或 manual_required         |
+| 页面未登录         | 出现登录页关键文本                                   | 停止当前用例，提示人工准备                                                       | blocked                             |
+| logcat 不可用    | `adb logcat` 命令失败或权限异常                      | 继续执行可视化用例，但报告标注 crash 监测不可用，并要求人工复核运行稳定性                            | manual_required                     |
+| Java crash    | logcat 在动作时间窗口内命中 `FATAL EXCEPTION` 且关联被测包名 | 写入 crashes.jsonl、提取 CrashSignature、保存 original_repro_path，停止当前用例    | fail_preliminary 或 blocked          |
+| ANR           | logcat 命中 `ANR in` 且关联被测包名                  | 写入 crashes.jsonl，报告标注响应性问题，停止当前用例或按配置继续下一条                          | fail_preliminary                    |
+| native crash  | logcat 命中 native crash 标志或 tombstone 线索     | 记录 crash 线索；若能拉取 tombstone 则保存，否则标注证据缺口                             | fail_preliminary 或 manual_required  |
+| 元素找不到         | 三级定位均失败                                     | 保存截图、候选元素摘要和失败原因                                                    | blocked                             |
+| 元素歧义          | 多候选置信度接近                                    | 根据动作风险等级和纠错预算处理；低风险可自动消歧或纠错，中高风险受限，高风险阻塞或人工确认                       | uncertain、manual_required 或 blocked |
+| 执行期别名差异       | 计划目标和 UI 可见文案不一致，例如 `自选` 与 `我的自选`           | 使用 Navigation Alias Skill 和当前界面证据生成 PlanAmendment，继续执行或要求人工确认       | success 或 manual_required           |
+| 纠错预算耗尽        | Correction Step 次数超过风险等级预算                  | 停止当前动作，保存 ExecutionTrace 和失败原因                                      | blocked 或 manual_required           |
+| 高风险动作         | 动作涉及交易、账户、登录退出、添加/删除自选等                     | 不自动执行或纠错，要求人工确认                                                     | manual_required 或 blocked           |
+| 点击无响应         | 点击后页面证据无变化                                  | 重试一次，仍无变化则 blocked                                                  | blocked                             |
+| LLM 输出非法 JSON | JSON schema 校验失败                            | 重试，仍失败则 uncertain                                                   | uncertain                           |
+| 数据正确性目标       | 目标分类为 data_correctness                      | 保存证据，要求人工复核                                                         | manual_required                     |
+| 顺序证据缺口        | 期望 A-B-C-D，但证据为 A-B-C、A-B-C-E 等             | 先按预算执行 Evidence Recollection；仍不完整则结构化记录 `verification_evidence_gap` | manual_required                     |
+| 证据冲突          | Poco、OCR、截图证据互相矛盾                           | Verification Agent 解释冲突并标记人工复核原因                                    | manual_required                     |
+| 截图失败          | snapshot 抛错                                 | 重试一次；仍失败则停止当前用例                                                     | blocked                             |
+| 状态图循环         | 启用 StateGraph 后连续回到同一 page_hash 且无新动作       | 停止探索或回到 ExecutionPlan 主线；MVP 不因状态图自动扩展新点击                           | blocked 或 manual_required           |
 
 Poco dump 失败的重试策略必须由配置控制：
 
@@ -1969,25 +1969,25 @@ MVP 可验收条件：
 
 ## 20. 风险与应对
 
-| 风险 | 影响 | 应对 |
-| --- | --- | --- |
-| 证券 App 控件树不完整 | Poco 无法识别关键元素 | OCR、模板匹配、截图坐标兜底 |
-| 行情数据动态变化 | 自动判断数据正确性不可靠 | MVP 不做最终判断，只保存证据并人工复核 |
-| 页面布局随版本变化 | 元素定位失败 | 使用语义定位和上下文，不依赖固定坐标 |
-| 多个同名元素 | 点击错误位置 | 使用 bounds、容器、区域、页面上下文和 ExecutionRationale 消歧 |
-| 自然语言与 UI 文案不一致 | Planner 或 Executor 误解目标 | 使用 Navigation Alias Skill，例如 `自选` 到 `我的自选`，并记录 InterpretationRationale 或 PlanAmendment |
-| 执行期可恢复误操作 | 用例流程偏离但仍继续执行 | 按动作风险等级限制纠错预算，所有纠错写入 ExecutionTrace |
-| 高风险动作误触 | 影响账户、交易或持久化用户数据 | 高风险动作不自动纠错，阻塞或要求人工确认 |
-| 顺序证据缺口 | A-B-C-D 目标只采集到 A-B-C 或 A-B-C-E | 先受限 Evidence Recollection，仍异常则结构化人工复核 |
-| 登录态不稳定 | 用例无法开始 | 第一版要求人工预置登录状态 |
-| 夜间模式或涨跌色配置 | 颜色判断误判 | 截图留痕，颜色规则人工复核 |
-| LLM 输出不稳定 | 计划或判断格式错误 | JSON schema 校验、低温度、重试、失败降级 |
-| 截图含敏感信息 | 数据安全风险 | 元素摘要脱敏，报告权限控制，后续做截图区域脱敏 |
-| logcat 噪音过大 | crash 误报或报告干扰 | 使用被测包名、时间窗口和 CrashSignature 归一化；噪音只作为 warning |
-| 崩溃路径不可复现 | 后续排查成本高 | MVP 保留 original_repro_path 和每步截图；路径精简作为 M6 能力，不覆盖原始路径 |
-| 自由探索误触高风险动作 | 可能影响账户、交易或本地持久化状态 | 探索 QA 不进入 MVP；后续必须依赖 blocklist、Action Risk Level 和人工确认 |
-| 状态图误判页面相同或不同 | 探索覆盖统计失真 | page fingerprint 只用于诊断和探索，不替代 ExecutionPlan 和验证结论 |
-| MCP 化过早导致部署复杂 | MVP 被协议、客户端差异和 Node/TypeScript 工程拖慢 | 先保持 Python 本地接口，MCP 作为工具层适配，不改变核心合同 |
+| 风险             | 影响                                  | 应对                                                                                     |
+| -------------- | ----------------------------------- | -------------------------------------------------------------------------------------- |
+| 证券 App 控件树不完整  | Poco 无法识别关键元素                       | OCR、模板匹配、截图坐标兜底                                                                        |
+| 行情数据动态变化       | 自动判断数据正确性不可靠                        | MVP 不做最终判断，只保存证据并人工复核                                                                  |
+| 页面布局随版本变化      | 元素定位失败                              | 使用语义定位和上下文，不依赖固定坐标                                                                     |
+| 多个同名元素         | 点击错误位置                              | 使用 bounds、容器、区域、页面上下文和 ExecutionRationale 消歧                                           |
+| 自然语言与 UI 文案不一致 | Planner 或 Executor 误解目标             | 使用 Navigation Alias Skill，例如 `自选` 到 `我的自选`，并记录 InterpretationRationale 或 PlanAmendment |
+| 执行期可恢复误操作      | 用例流程偏离但仍继续执行                        | 按动作风险等级限制纠错预算，所有纠错写入 ExecutionTrace                                                    |
+| 高风险动作误触        | 影响账户、交易或持久化用户数据                     | 高风险动作不自动纠错，阻塞或要求人工确认                                                                   |
+| 顺序证据缺口         | A-B-C-D 目标只采集到 A-B-C 或 A-B-C-E      | 先受限 Evidence Recollection，仍异常则结构化人工复核                                                  |
+| 登录态不稳定         | 用例无法开始                              | 第一版要求人工预置登录状态                                                                          |
+| 夜间模式或涨跌色配置     | 颜色判断误判                              | 截图留痕，颜色规则人工复核                                                                          |
+| LLM 输出不稳定      | 计划或判断格式错误                           | JSON schema 校验、低温度、重试、失败降级                                                             |
+| 截图含敏感信息        | 数据安全风险                              | 元素摘要脱敏，报告权限控制，后续做截图区域脱敏                                                                |
+| logcat 噪音过大    | crash 误报或报告干扰                       | 使用被测包名、时间窗口和 CrashSignature 归一化；噪音只作为 warning                                          |
+| 崩溃路径不可复现       | 后续排查成本高                             | MVP 保留 original_repro_path 和每步截图；路径精简作为 M6 能力，不覆盖原始路径                                  |
+| 自由探索误触高风险动作    | 可能影响账户、交易或本地持久化状态                   | 探索 QA 不进入 MVP；后续必须依赖 blocklist、Action Risk Level 和人工确认                                 |
+| 状态图误判页面相同或不同   | 探索覆盖统计失真                            | page fingerprint 只用于诊断和探索，不替代 ExecutionPlan 和验证结论                                      |
+| MCP 化过早导致部署复杂  | MVP 被协议、客户端差异和 Node/TypeScript 工程拖慢 | 先保持 Python 本地接口，MCP 作为工具层适配，不改变核心合同                                                    |
 
 ---
 

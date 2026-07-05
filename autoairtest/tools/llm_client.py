@@ -6,9 +6,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urljoin
 
 Provider = Callable[[dict[str, Any]], str | dict[str, Any]]
 
@@ -24,15 +28,26 @@ class LLMClient:
     ) -> None:
         self.provider = provider
         self.config = {
+            "enabled": False,
+            "provider": "openai_compatible",
+            "base_url": "https://api.openai.com/v1",
+            "chat_completions_path": "/chat/completions",
+            "api_key_env": "OPENAI_API_KEY",
+            "api_key": "",
             "model": "configured-by-env",
             "temperature": 0.1,
             "max_retries": 2,
+            "timeout_seconds": 60,
+            "system_prompt": "你是移动 App 测试结果初判助手。只输出符合 schema 的 JSON。",
         } | (config or {})
         self.evidence_config = {
             "redact_sensitive_text": True,
             "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
             "redaction_placeholder": "[REDACTED]",
         } | (evidence_config or {})
+        self.provider_error = ""
+        if self.provider is None and self.config.get("enabled", False):
+            self.provider = self._provider_from_config()
 
     def json_call(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
         """请求模型按给定 schema 返回 JSON 结构。
@@ -43,7 +58,7 @@ class LLMClient:
         if self.provider is None:
             return {
                 "status": "unavailable",
-                "reason": "LLM provider is not configured",
+                "reason": self.provider_error or "LLM provider is not configured",
                 "attempts": 0,
                 "errors": [],
             }
@@ -86,6 +101,20 @@ class LLMClient:
             "errors": errors,
         }
 
+    def _provider_from_config(self) -> Provider | None:
+        provider_name = str(self.config.get("provider", "openai_compatible")).strip().lower()
+        if provider_name not in {"openai_compatible", "openai-compatible", "openai"}:
+            self.provider_error = f"Unsupported LLM provider: {provider_name}"
+            return None
+
+        api_key = _api_key_from_config(self.config)
+        if not api_key:
+            api_key_env = str(self.config.get("api_key_env", "")).strip()
+            self.provider_error = f"LLM api key is not configured; set llm.api_key or environment variable {api_key_env}."
+            return None
+
+        return _openai_compatible_provider(self.config, api_key)
+
 
 def _parse_json_response(raw_response: str | dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if isinstance(raw_response, dict):
@@ -93,7 +122,7 @@ def _parse_json_response(raw_response: str | dict[str, Any]) -> tuple[dict[str, 
     if not isinstance(raw_response, str):
         return {}, {"type": "invalid_json", "message": "provider returned non-string and non-dict response"}
     try:
-        parsed = json.loads(raw_response)
+        parsed = json.loads(_strip_json_fence(raw_response))
     except json.JSONDecodeError as exc:
         return {}, {"type": "invalid_json", "message": str(exc)}
     if not isinstance(parsed, dict):
@@ -110,6 +139,14 @@ def _validate_object_schema(data: dict[str, Any], schema: dict[str, Any]) -> lis
     return [str(item) for item in required if str(item) not in data]
 
 
+def _strip_json_fence(value: str) -> str:
+    text = value.strip()
+    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return text
+
+
 def _redact_sensitive_text(value: str, evidence_config: dict[str, Any]) -> str:
     if not evidence_config.get("redact_sensitive_text", True):
         return value
@@ -121,3 +158,74 @@ def _redact_sensitive_text(value: str, evidence_config: dict[str, Any]) -> str:
             pattern = re.escape(keyword_text) + r"\s*[^\s，,。；;]*"
             redacted = re.sub(pattern, placeholder, redacted)
     return redacted
+
+
+def _api_key_from_config(config: dict[str, Any]) -> str:
+    direct_key = str(config.get("api_key", "")).strip()
+    if direct_key:
+        return direct_key
+    env_name = str(config.get("api_key_env", "")).strip()
+    if not env_name:
+        return ""
+    return str(os.environ.get(env_name, "")).strip()
+
+
+def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provider:
+    endpoint = _chat_completions_url(config)
+    timeout = float(config.get("timeout_seconds", 60) or 60)
+
+    def provider(payload: dict[str, Any]) -> str:
+        request_body = {
+            "model": payload.get("model") or config.get("model", "configured-by-env"),
+            "temperature": payload.get("temperature", config.get("temperature", 0.1)),
+            "messages": [
+                {"role": "system", "content": str(config.get("system_prompt", ""))},
+                {"role": "user", "content": str(payload.get("prompt", ""))},
+            ],
+        }
+        if config.get("response_format_json", True):
+            request_body["response_format"] = {"type": "json_object"}
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response_text = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
+
+        response_json = json.loads(response_text)
+        return _extract_openai_compatible_content(response_json)
+
+    return provider
+
+
+def _chat_completions_url(config: dict[str, Any]) -> str:
+    base_url = str(config.get("base_url", "")).strip().rstrip("/") + "/"
+    path = str(config.get("chat_completions_path", "/chat/completions")).strip().lstrip("/")
+    return urljoin(base_url, path)
+
+
+def _extract_openai_compatible_content(response: dict[str, Any]) -> str:
+    choices = response.get("choices", [])
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("LLM response does not contain choices")
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        raise RuntimeError("LLM choice is not an object")
+    message = first_choice.get("message", {})
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"]
+    if isinstance(first_choice.get("text"), str):
+        return str(first_choice["text"])
+    raise RuntimeError("LLM response does not contain message content")
