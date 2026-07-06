@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from autoairtest.models import (
     VerificationGoalCategory,
 )
 from autoairtest.planning.rule_based_planner import RuleBasedPlanner
+from autoairtest.planning.skill_registry import NavigationNode, SkillRegistry
 
 
 class PlanningAgent:
@@ -25,10 +26,12 @@ class PlanningAgent:
         self,
         llm_client: Any | None = None,
         rule_based_planner: RuleBasedPlanner | None = None,
+        skill_registry: SkillRegistry | None = None,
         prompt_path: str | Path | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.rule_based_planner = rule_based_planner or RuleBasedPlanner()
+        self.skill_registry = skill_registry
         self.prompt_path = Path(prompt_path) if prompt_path else Path("prompts/planner.md")
 
     def plan(self, case: NaturalLanguageTestCase) -> ExecutionPlan:
@@ -39,7 +42,8 @@ class PlanningAgent:
         return self.rule_based_planner.plan(case)
 
     def _plan_with_llm(self, case: NaturalLanguageTestCase) -> ExecutionPlan | None:
-        prompt = self._planner_prompt(case)
+        navigation_path = self._navigation_path_for(case)
+        prompt = self._planner_prompt(case, navigation_path)
         result = self.llm_client.json_call(prompt, self._schema())
         if not isinstance(result, dict) or result.get("status") != "success":
             return None
@@ -47,16 +51,18 @@ class PlanningAgent:
         if not isinstance(data, dict):
             return None
         try:
-            return self._execution_plan_from_dict(data)
+            return self._apply_navigation_path(self._execution_plan_from_dict(data), case, navigation_path)
         except (KeyError, TypeError, ValueError):
             return None
 
-    def _planner_prompt(self, case: NaturalLanguageTestCase) -> str:
+    def _planner_prompt(self, case: NaturalLanguageTestCase, navigation_path: list[NavigationNode] | None = None) -> str:
         base_prompt = ""
         if self.prompt_path.exists():
             base_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
+        navigation_section = self._navigation_prompt_section(navigation_path or [])
         return (
             f"{base_prompt}\n\n"
+            f"{navigation_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -65,6 +71,100 @@ class PlanningAgent:
             f"expected_result: {case.expected_result}\n"
             f"parameters: {case.parameters}"
         ).strip()
+
+    def _navigation_path_for(self, case: NaturalLanguageTestCase) -> list[NavigationNode]:
+        if self.skill_registry is None:
+            return []
+        return self.skill_registry.resolve_navigation_path(self._navigation_context_for(case))
+
+    def _navigation_context_for(self, case: NaturalLanguageTestCase) -> str:
+        parts = [
+            case.business_module,
+            case.feature_module,
+            case.feature_item,
+            case.step_name,
+            case.operation_description,
+        ]
+        return " ".join(str(part).strip() for part in parts if str(part).strip())
+
+    def _navigation_prompt_section(self, navigation_path: list[NavigationNode]) -> str:
+        if not navigation_path:
+            return (
+                "Navigation skill: no deterministic navigation path matched this case. "
+                "If navigation actions are needed, use visible UI text and keep actions low risk."
+            )
+        path_text = " -> ".join(node.text for node in navigation_path)
+        node_rules = "\n".join(
+            f"- {node.node_id}: text={node.text}, aliases={list(node.aliases)}"
+            for node in navigation_path
+        )
+        return (
+            "Navigation skill matched path. Use this exact path for leading navigation actions; "
+            "do not invent menu names outside these nodes.\n"
+            f"path: {path_text}\n"
+            f"nodes:\n{node_rules}"
+        )
+
+    def _apply_navigation_path(
+        self,
+        plan: ExecutionPlan,
+        case: NaturalLanguageTestCase,
+        navigation_path: list[NavigationNode],
+    ) -> ExecutionPlan:
+        if not navigation_path:
+            return plan
+
+        navigation_actions = [
+            PlanAction(
+                action_id=f"a{index}",
+                intent="navigate",
+                description=f"进入{node.text}",
+                target=node.text,
+                target_context=case.operation_description,
+                preferred_locator="poco_semantic",
+                action_risk_level=ActionRiskLevel.LOW,
+                interpretation_rationale_ids=[f"ir_navigation_{node.node_id}"],
+            )
+            for index, node in enumerate(navigation_path, start=1)
+        ]
+        remaining_actions = [
+            action for action in plan.actions if action.intent != "navigate" and action.target not in _node_texts(navigation_path)
+        ]
+        renumbered_actions = _renumber_actions([*navigation_actions, *remaining_actions])
+        rationales = _merge_rationales(
+            plan.interpretation_rationales,
+            self._navigation_rationales_for(case, navigation_path),
+        )
+        notes = list(plan.manual_review_notes)
+        note = "LLM plan navigation actions normalized by skills/navigation nodes.yaml."
+        if note not in notes:
+            notes.append(note)
+        return replace(
+            plan,
+            actions=renumbered_actions,
+            manual_review_notes=notes,
+            interpretation_rationales=rationales,
+        )
+
+    def _navigation_rationales_for(
+        self,
+        case: NaturalLanguageTestCase,
+        navigation_path: list[NavigationNode],
+    ) -> list[InterpretationRationale]:
+        context = self._navigation_context_for(case)
+        return [
+            InterpretationRationale(
+                rationale_id=f"ir_navigation_{node.node_id}",
+                original_expression=context,
+                normalized_meaning=node.text,
+                interpretation_type="navigation_path",
+                confidence=0.9,
+                matched_skill_rules=[f"navigation_node.{node.node_id}"],
+                basis=f"LLM planning constrained by navigation skill node {node.node_id}.",
+                human_review_required=False,
+            )
+            for node in navigation_path
+        ]
 
     def _schema(self) -> dict[str, Any]:
         return {
@@ -166,3 +266,24 @@ class PlanningAgent:
         if not isinstance(value, list):
             raise TypeError("Expected list")
         return value
+
+
+def _node_texts(nodes: list[NavigationNode]) -> set[str]:
+    return {node.text for node in nodes}
+
+
+def _renumber_actions(actions: list[PlanAction]) -> list[PlanAction]:
+    return [replace(action, action_id=f"a{index}") for index, action in enumerate(actions, start=1)]
+
+
+def _merge_rationales(
+    original: list[InterpretationRationale],
+    additions: list[InterpretationRationale],
+) -> list[InterpretationRationale]:
+    merged = list(original)
+    existing_ids = {item.rationale_id for item in merged}
+    for item in additions:
+        if item.rationale_id not in existing_ids:
+            merged.append(item)
+            existing_ids.add(item.rationale_id)
+    return merged

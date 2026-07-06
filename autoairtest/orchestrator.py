@@ -60,6 +60,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     planner = PlanningAgent(
         llm_client=_planning_llm_client(config),
         rule_based_planner=_build_rule_based_planner(skill_registry),
+        skill_registry=skill_registry,
     )
 
     cases = _filter_cases(_load_cases_or_dependency_case(config), config["input"].get("case_filter", ""))

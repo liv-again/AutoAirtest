@@ -43,7 +43,7 @@ nodes:
     text: 全球
     parent: market_quotes
     aliases:
-      - 全球行情
+      - 股指
     children: []
   market_a_share:
     text: A股
@@ -58,7 +58,6 @@ nodes:
     text: 沪深京
     parent: market_a_share
     aliases:
-      - 沪深
       - 沪深京A股
     children: []
   sector:
