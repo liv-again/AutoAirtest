@@ -49,6 +49,9 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     if config_path:
         config = merge_config(config, load_config(config_path))
     config = merge_config(config, overrides)
+    # 根据 LLM 配置解析 execution.llm 标志位
+    llm_enabled = bool(config.get("llm", {}).get("enabled", False) and config.get("llm", {}).get("use_for_planning", False))
+    config["execution"]["llm"] = llm_enabled
     _save_resolved_config_if_requested(config)
 
     started_at = datetime.now().isoformat(timespec="seconds")
@@ -180,6 +183,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             )
         if config.get("execution", {}).get("enable_state_graph", False):
             _update_state_graph_from_actions(state_graph, case.internal_id, case_dir, action_results)
+        _write_case_log(case_dir, case, action_results, plan, config)
         verification_evidence = {
             "visible_texts": [],
             "evidence_files": [],
@@ -224,7 +228,6 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
         if evidence_recollection_trace:
             store.write_case_json(case.internal_id, "evidence_recollection_trace.json", evidence_recollection_trace)
             _append_evidence_recollection_execution_trace(case_dir, evidence_recollection_trace)
-        (case_dir / "logs.txt").write_text("Offline run completed without device execution.\n", encoding="utf-8")
         run_results.append(run_result)
         case_summaries.append(
             {
@@ -576,3 +579,85 @@ def _crash_signature_id(crash: Any) -> str:
     if isinstance(crash, dict):
         return str(crash.get("signature_id", ""))
     return ""
+
+
+def _write_case_log(
+    case_dir: Path,
+    case: Any,
+    action_results: list[ActionResult],
+    plan: Any,
+    config: dict[str, Any],
+) -> None:
+    """Write case-level execution log with mode-aware content.
+
+    In device mode, writes structured action-level results and a summary.
+    In offline mode, writes a placeholder indicating no device execution occurred.
+    """
+    is_device = config.get("execution", {}).get("mode") == "device"
+    lines: list[str] = []
+
+    if not is_device:
+        lines.append("Offline run completed without device execution.")
+        (case_dir / "logs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+
+    # ── Device mode: structured execution log ──
+    lines.append("=" * 60)
+    lines.append("AutoAirtest Device Execution Log")
+    lines.append("=" * 60)
+    lines.append(f"Case ID      : {getattr(case, 'internal_id', 'unknown')}")
+    lines.append(f"Case Name    : {getattr(case, 'case_id', 'unknown')}")
+    lines.append(f"Description  : {getattr(case, 'operation_description', '')}")
+    lines.append(f"Plan Actions : {len(plan.actions)}")
+    lines.append(f"LLM Planning : {config.get('execution', {}).get('llm', False)}")
+    lines.append(f"Executed At  : {datetime.now().isoformat(timespec='seconds')}")
+
+    # Read device setup status if available
+    setup_path = case_dir / "device_setup.json"
+    if setup_path.exists():
+        try:
+            setup = json.loads(setup_path.read_text(encoding="utf-8"))
+            lines.append(f"Device Setup : {setup.get('status', 'unknown')}")
+            if setup.get("reason"):
+                lines.append(f"Setup Reason : {setup['reason']}")
+        except (json.JSONDecodeError, OSError):
+            lines.append("Device Setup : <unable to read>")
+    else:
+        lines.append("Device Setup : <not found>")
+
+    # Read crash refs if available
+    crash_refs_path = case_dir / "crash_refs.json"
+    crash_count = 0
+    if crash_refs_path.exists():
+        try:
+            crash_refs = json.loads(crash_refs_path.read_text(encoding="utf-8"))
+            crash_count = len(crash_refs) if isinstance(crash_refs, list) else 0
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("Action Results")
+    lines.append("-" * 60)
+
+    status_counts: dict[str, int] = {}
+    for i, ar in enumerate(action_results, 1):
+        status = ar.status.value
+        status_counts[status] = status_counts.get(status, 0) + 1
+        lines.append(f"  [{i}] {ar.action_id} → {status}")
+        if ar.notes:
+            for note in ar.notes:
+                lines.append(f"       note: {note}")
+
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("Summary")
+    lines.append("-" * 60)
+    lines.append(f"  Total Actions : {len(action_results)}")
+    for status, count in sorted(status_counts.items()):
+        lines.append(f"  {status:>30s} : {count}")
+    if crash_count:
+        lines.append(f"  Crashes Detected : {crash_count}")
+    lines.append("=" * 60)
+
+    (case_dir / "logs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")

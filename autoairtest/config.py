@@ -34,6 +34,7 @@ def default_config() -> dict[str, Any]:
             "root": "skills",
         },
         "execution": {
+            "llm": False,
             "mode": "offline",
             "continue_on_case_failure": True,
             "action_timeout_seconds": 10,
