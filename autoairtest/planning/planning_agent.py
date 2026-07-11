@@ -195,6 +195,7 @@ class PlanningAgent:
             verification_goals=goals,
             manual_review_notes=[str(item) for item in self._list(data["manual_review_notes"])],
             interpretation_rationales=rationales,
+            llm_used=True,
         )
 
     def _action_from_dict(self, data: Any) -> PlanAction:

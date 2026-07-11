@@ -63,6 +63,7 @@ class RuleBasedPlanner:
             verification_goals=goals,
             manual_review_notes=["Rule-based offline plan; no Python code generated."],
             interpretation_rationales=self._rationales_for(case, navigation_path),
+            llm_used=False,
         )
 
     def _actions_for(self, case: NaturalLanguageTestCase, navigation_path: list[NavigationNode]) -> list[PlanAction]:

@@ -142,6 +142,7 @@ class ExecutionPlan:
     verification_goals: list[VerificationGoal]
     manual_review_notes: list[str]
     interpretation_rationales: list[InterpretationRationale] = field(default_factory=list)
+    llm_used: bool = False
 
 
 @dataclass(frozen=True)
