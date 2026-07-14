@@ -1,16 +1,19 @@
 """结构化 LLM 客户端边界。
 
 该模块不绑定具体供应商；生产集成可通过 provider 注入，离线测试则使用假 provider。
+支持多模态图片输入（DeepSeek V4-Pro/V4-Flash），不传图片时行为与纯文本版本完全一致。
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
@@ -49,10 +52,16 @@ class LLMClient:
         if self.provider is None and self.config.get("enabled", False):
             self.provider = self._provider_from_config()
 
-    def json_call(self, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+    def json_call(
+        self,
+        prompt: str,
+        schema: dict[str, Any],
+        images: list[str] | None = None,
+    ) -> dict[str, Any]:
         """请求模型按给定 schema 返回 JSON 结构。
 
-        返回值始终是结构化状态，避免上层吞掉 provider、JSON 或 schema 错误。
+        可选 images 参数传入图片 URL 或本地路径（自动 base64 编码），
+        触发多模态消息格式。不传时保持纯文本行为，兼容所有模型。
         """
 
         if self.provider is None:
@@ -69,12 +78,16 @@ class LLMClient:
         redacted_prompt = _redact_sensitive_text(prompt, self.evidence_config)
 
         for attempt in range(1, max_attempts + 1):
+            resolved_images: list[str] = []
+            if images:
+                resolved_images = [_resolve_image_url(img) for img in images]
             payload = {
                 "model": self.config.get("model", "configured-by-env"),
                 "temperature": self.config.get("temperature", 0.1),
                 "prompt": redacted_prompt,
                 "schema": schema,
                 "attempt": attempt,
+                "images": resolved_images,
             }
             try:
                 raw_response = self.provider(payload)
@@ -175,12 +188,16 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
     timeout = float(config.get("timeout_seconds", 60) or 60)
 
     def provider(payload: dict[str, Any]) -> str:
+        user_content: str | list[dict[str, Any]] = str(payload.get("prompt", ""))
+        images: list[str] = payload.get("images", [])
+        if images:
+            user_content = _build_multimodal_content(user_content, images)
         request_body = {
             "model": payload.get("model") or config.get("model", "configured-by-env"),
             "temperature": payload.get("temperature", config.get("temperature", 0.1)),
             "messages": [
                 {"role": "system", "content": str(config.get("system_prompt", ""))},
-                {"role": "user", "content": str(payload.get("prompt", ""))},
+                {"role": "user", "content": user_content},
             ],
         }
         if config.get("response_format_json", True):
@@ -229,3 +246,30 @@ def _extract_openai_compatible_content(response: dict[str, Any]) -> str:
     if isinstance(first_choice.get("text"), str):
         return str(first_choice["text"])
     raise RuntimeError("LLM response does not contain message content")
+
+
+def _resolve_image_url(image: str) -> str:
+    """如果是本地路径，转为 base64 data URI；否则原样返回（视为 URL）。"""
+    path = Path(image)
+    if path.exists() and path.is_file():
+        suffix = path.suffix.lower().lstrip(".")
+        mime = {
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+            "bmp": "image/bmp",
+        }.get(suffix, "image/png")
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    return image
+
+
+def _build_multimodal_content(text: str, images: list[str]) -> list[dict[str, Any]]:
+    """构建多模态 content 数组：文本在前，图片在后。"""
+    parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+    for img in images:
+        parts.append({"type": "image_url", "image_url": {"url": img}})
+    return parts
