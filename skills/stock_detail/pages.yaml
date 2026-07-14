@@ -1,0 +1,40 @@
+# 个股详情页入口路由
+# 多个页面均可进入同一个个股详情页，因此不适合用单父节点树描述。
+version: 1
+schema: stock_detail_entry_routes
+
+entries:
+  # ── 行情页入口 ──
+  market_quote_entry:
+    description: 从行情页点击任意股票进入个股详情
+    route:
+      - node: market            # 底部Tab：行情
+      - node: market_quotes     # 行情页内容区
+      - action: tap_stock_item  # 点击列表中任意股票 → 进入个股详情
+
+  market_search_entry:
+    description: 从行情页搜索股票代码/名称后进入
+    route:
+      - node: market
+      - node: market_search
+      - action: search_input     # 输入股票代码
+      - action: tap_search_result # 点击搜索结果 → 进入个股详情
+
+  # ── 自选页入口 ──
+  watchlist_entry:
+    description: 从自选列表点击股票进入
+    route:
+      - node: home               # 底部Tab：自选（首页）
+      - action: tap_stock_item   # 点击自选列表中任意股票 → 进入个股详情
+
+  # ── 交易页入口 ──
+  trade_position_entry:
+    description: 从交易持仓页点击股票进入
+    route:
+      - node: trade
+      - node: normal_trade
+      - action: tap_position_item # 点击持仓列表中股票 → 进入个股详情
+
+target_page:
+  page_id: stock_fenshi
+  description: 个股分时页（默认进入的个股详情主页面）
