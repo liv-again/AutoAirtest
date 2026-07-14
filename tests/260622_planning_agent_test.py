@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from autoairtest.models import NaturalLanguageTestCase
 from autoairtest.planning.planning_agent import PlanningAgent
+from autoairtest.planning.rule_based_planner import RuleBasedPlanner
 from autoairtest.planning.skill_registry import SkillRegistry
 
 
@@ -129,3 +130,232 @@ nodes:
         rationale.matched_skill_rules == ["navigation_node.cn_a_market"]
         for rationale in plan.interpretation_rationales
     )
+
+
+def _write_stock_detail_skill(tmp_path):
+    skill_dir = tmp_path / "skills" / "stock_detail"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("fenshi_elements_1.yaml").write_text(
+        """
+page_id: stock_fenshi
+roots: [title_bar, bottom_navigation]
+elements:
+  title_bar:
+    text: 标题栏
+    parent: null
+    aliases: []
+    children: [title_back, title_search]
+    locators: []
+  title_back:
+    text: 返回
+    parent: title_bar
+    aliases: [返回按钮]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/backButton
+    description: 标题栏返回图标
+  title_search:
+    text: 搜索
+    parent: title_bar
+    aliases: [个股搜索]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/navi_title_right
+    description: 标题栏搜索图标
+  bottom_navigation:
+    text: 底部导航栏
+    parent: null
+    aliases: [底部操作栏]
+    children: [bottom_more]
+    locators: []
+  bottom_more:
+    text: 更多
+    parent: bottom_navigation
+    aliases: [底部更多]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/ll_more
+    description: 底部更多图标
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_planning_agent_injects_stock_detail_usage_and_enriches_llm_action(tmp_path):
+    _write_stock_detail_skill(tmp_path)
+
+    class FakeLLMClient:
+        def __init__(self):
+            self.prompt = ""
+
+        def json_call(self, prompt, schema):
+            self.prompt = prompt
+            return {
+                "status": "success",
+                "data": {
+                    "case_id": "TC_1",
+                    "understanding": "点击个股分时页返回图标",
+                    "preconditions": [],
+                    "actions": [
+                        {
+                            "action_id": "a1",
+                            "intent": "tap",
+                            "description": "点击返回",
+                            "target": "返回",
+                            "target_context": "个股分时页标题栏",
+                            "preferred_locator": "poco_semantic",
+                            "action_risk_level": "low",
+                            "interpretation_rationale_ids": [],
+                        }
+                    ],
+                    "verification_goals": [],
+                    "manual_review_notes": [],
+                    "interpretation_rationales": [],
+                },
+            }
+
+    llm = FakeLLMClient()
+    case = replace(
+        _case(),
+        business_module="个股详情",
+        feature_module="分时页",
+        operation_description="在个股分时页点击返回",
+    )
+
+    plan = PlanningAgent(
+        llm_client=llm,
+        skill_registry=SkillRegistry(tmp_path / "skills"),
+    ).plan(case)
+
+    assert "Stock detail skill applies" in llm.prompt
+    assert "title_back" in llm.prompt
+    assert "resource_id=id/backButton" in llm.prompt
+    assert plan.actions[0].preferred_locator == "poco_resource_id"
+    assert plan.actions[0].locators[0].type == "resource_id"
+    assert plan.actions[0].locators[0].value == "id/backButton"
+    assert any(
+        rationale.matched_skill_rules == ["stock_detail_element.title_back"]
+        for rationale in plan.interpretation_rationales
+    )
+
+
+def test_rule_based_planner_enriches_stock_detail_icon_action(tmp_path):
+    _write_stock_detail_skill(tmp_path)
+    case = replace(
+        _case(),
+        business_module="个股详情",
+        feature_module="分时页",
+        operation_description="在个股分时页点击返回",
+    )
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(tmp_path / "skills")).plan(case)
+
+    action = next(action for action in plan.actions if action.target == "返回")
+    assert action.intent == "tap"
+    assert action.preferred_locator == "poco_resource_id"
+    assert action.locators[0].type == "resource_id"
+    assert action.locators[0].value == "id/backButton"
+
+
+def test_rule_based_planner_deduplicates_legacy_and_stock_detail_more_action(tmp_path):
+    _write_stock_detail_skill(tmp_path)
+    case = replace(
+        _case(),
+        business_module="个股详情",
+        feature_module="分时页",
+        operation_description="在个股分时页点击底部导航栏更多",
+    )
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(tmp_path / "skills")).plan(case)
+
+    more_actions = [action for action in plan.actions if action.target == "更多"]
+    assert len(more_actions) == 1
+    assert more_actions[0].locators[0].value == "id/ll_more"
+
+
+def _write_navigation_search_skill(tmp_path):
+    skill_dir = tmp_path / "skills" / "navigation"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("nodes.yaml").write_text(
+        """
+roots: [market]
+nodes:
+  market:
+    text: 行情
+    parent: null
+    aliases: []
+    children: [market_search]
+  market_search:
+    text: 搜索
+    parent: market
+    aliases: [行情搜索]
+    children: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_llm_planner_does_not_apply_page_local_locator_to_navigation_action(tmp_path):
+    _write_stock_detail_skill(tmp_path)
+    _write_navigation_search_skill(tmp_path)
+
+    class FakeLLMClient:
+        def json_call(self, prompt, schema):
+            return {
+                "status": "success",
+                "data": {
+                    "case_id": "TC_1",
+                    "understanding": "从行情搜索进入个股分时页",
+                    "preconditions": [],
+                    "actions": [
+                        {
+                            "action_id": "a1",
+                            "intent": "observe",
+                            "description": "观察详情页",
+                            "target": "当前页面",
+                            "target_context": "个股分时页",
+                            "preferred_locator": "poco_semantic",
+                            "action_risk_level": "low",
+                            "interpretation_rationale_ids": [],
+                        }
+                    ],
+                    "verification_goals": [],
+                    "manual_review_notes": [],
+                    "interpretation_rationales": [],
+                },
+            }
+
+    case = replace(
+        _case(),
+        business_module="个股详情",
+        feature_module="分时页",
+        operation_description="从行情搜索进入个股分时页",
+    )
+    plan = PlanningAgent(
+        llm_client=FakeLLMClient(),
+        skill_registry=SkillRegistry(tmp_path / "skills"),
+    ).plan(case)
+
+    search_action = next(action for action in plan.actions if action.intent == "navigate" and action.target == "搜索")
+    assert search_action.locators == []
+    assert search_action.preferred_locator == "poco_semantic"
+
+
+def test_rule_planner_does_not_apply_page_local_locator_to_navigation_action(tmp_path):
+    _write_stock_detail_skill(tmp_path)
+    _write_navigation_search_skill(tmp_path)
+    case = replace(
+        _case(),
+        business_module="个股详情",
+        feature_module="分时页",
+        operation_description="从行情搜索进入个股分时页",
+    )
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(tmp_path / "skills")).plan(case)
+
+    search_action = next(action for action in plan.actions if action.intent == "navigate" and action.target == "搜索")
+    assert search_action.locators == []
+    assert search_action.preferred_locator == "poco_semantic"

@@ -1,390 +1,530 @@
 # 个股分时页元素定义
-# 每个元素描述"在哪里"和"怎么找到它"，供 planner 生成定位策略、executor 执行 Poco 操作。
-#
-# 标记约定：
-#   [待确认] — 文字/content_desc/resource_id 需在真机上验证
-#   [版本依赖] — 依赖特定 App 版本的 resource-id
-#
+# 使用稳定 element ID、单父节点层级和有序定位器，格式风格与 skills/navigation 保持一致。
 version: 1
-schema: stock_detail_elements
+schema: stock_detail_page_elements
+source: ../../中原个股分时页.md
 page_id: stock_fenshi
-resolution: 1080x2376
+
+roots:
+  - title_bar
+  - quote_headline
+  - express
+  - after_hours_trade
+  - chart_switch
+  - detail
+  - news
+  - order_book
+  - announcement
+  - f10_summary
+  - finance
+  - research_report
+  - bottom_navigation
 
 elements:
+  title_bar:
+    text: 标题栏
+    parent: null
+    aliases: []
+    children: [title_back, title_search]
+    locators: []
+    description: 页面顶部标题栏
 
-  # ═══════════════════════════════════════════
-  # 1. 顶部信息栏 (header)
-  # ═══════════════════════════════════════════
+  title_back:
+    text: 返回
+    parent: title_bar
+    aliases: [返回按钮]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/backButton
+    description: 标题栏返回图标
 
-  stock_name:
-    text: ""                         # 动态内容，显示当前股票名
-    aliases: [股票名称, 名称]
-    locator: { type: resource_id, value: stock_name_text }  # [待确认]
-    region: header
-    description: 个股名称，如"贵州茅台"
+  title_search:
+    text: 搜索
+    parent: title_bar
+    aliases: [搜索按钮, 个股搜索]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/navi_title_right
+    description: 标题栏右侧搜索图标
 
-  stock_code:
-    text: ""                         # 动态内容，显示当前股票代码
-    aliases: [股票代码, 代码]
-    locator: { type: resource_id, value: stock_code_text }  # [待确认]
-    region: header
-    description: 个股代码，如"600519"
+  quote_headline:
+    text: 简报价头
+    parent: null
+    aliases: [报价头, 行情头]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/fenshi_headline_view
+    description: 个股分时页简报价头区域
 
-  current_price:
-    text: ""                         # 动态，如 "1768.00"
-    aliases: [当前价, 最新价, 现价]
-    locator: { type: resource_id, value: current_price_text }  # [待确认]
-    region: header
-    description: 当前成交价格
+  express:
+    text: 速递
+    parent: null
+    aliases: [速递栏]
+    children: [express_title, express_close]
+    locators: []
+    description: 速递信息区域
 
-  price_change:
-    text: ""                         # 动态，如 "+2.35%"
-    aliases: [涨跌幅, 涨跌]
-    locator: { type: resource_id, value: price_change_text }  # [待确认]
-    region: header
-    description: 涨跌幅百分比
+  express_title:
+    text: 速递标题
+    parent: express
+    aliases: [速递内容]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/tv_express_content
+    description: 速递区域标题或内容文本
 
-  back_button:
-    text: ""
-    aliases: [返回, 退出]
-    locator: { type: content_desc, value: 返回 }  # [待确认]
-    region: header
-    description: 左上角返回按钮（纯图标，无文字）
+  express_close:
+    text: 关闭按钮
+    parent: express
+    aliases: [关闭速递, 关闭]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/iv_express_close
+    description: 速递区域关闭图标
 
-  refresh_button:
-    text: ""
-    aliases: [刷新]
-    locator: { type: content_desc, value: 刷新 }  # [待确认]
-    region: header
-    description: 右上角刷新按钮
+  after_hours_trade:
+    text: 盘后固定交易
+    parent: null
+    aliases: [盘后交易]
+    children: [after_hours_expand]
+    locators: []
+    description: 盘后固定交易区域
 
-  search_button:
-    text: ""
-    aliases: [搜索, 个股搜索]
-    locator: { type: content_desc, value: 搜索 }  # [待确认]
-    region: header
-    description: 搜索图标
+  after_hours_expand:
+    text: 展开
+    parent: after_hours_trade
+    aliases: [展开盘后固定交易]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/img_open
+      - type: content_desc
+        value: 展开
+    description: 展开盘后固定交易的图标
 
-  # ═══════════════════════════════════════════
-  # 2. 图表类型切换 Tab (chart_tabs)
-  # 纯图标，无文字标签
-  # ═══════════════════════════════════════════
+  chart_switch:
+    text: 分时切换
+    parent: null
+    aliases: [图表切换, 周期切换]
+    children:
+      - chart_fenshi
+      - chart_daily_k
+      - chart_weekly_k
+      - chart_monthly_k
+      - chart_five_day
+      - chart_more
+      - chart_settings
+    locators: []
+    description: 分时和 K 线周期切换区域
 
-  tab_fenshi:
+  chart_fenshi:
     text: 分时
-    aliases: [分时图, 分时线]
-    locator: { type: text, value: 分时 }
-    region: chart_tabs
-    description: 分时图 Tab（默认选中状态）
-    position_hint: 图表区域左上角第 1 个
+    parent: chart_switch
+    aliases: [分时图]
+    children: []
+    locators:
+      - type: text
+        value: 分时
+    description: 切换到分时图
 
-  tab_fiveday:
-    text: 五日
-    aliases: [五日图, 五日线]
-    locator: { type: text, value: 五日 }
-    region: chart_tabs
-    description: 五日走势图 Tab
-    position_hint: 图表区域左上角第 2 个
-
-  tab_daily_k:
+  chart_daily_k:
     text: 日K
-    aliases: [日K线, 日线, K线, K线图]
-    locator: { type: text, value: 日K }
-    region: chart_tabs
-    description: 日K线图 Tab
-    position_hint: 图表区域左上角第 3 个
+    parent: chart_switch
+    aliases: [日K线, 日线]
+    children: []
+    locators:
+      - type: text
+        value: 日K
+    description: 切换到日 K 图
 
-  tab_weekly_k:
+  chart_weekly_k:
     text: 周K
+    parent: chart_switch
     aliases: [周K线, 周线]
-    locator: { type: text, value: 周K }
-    region: chart_tabs
-    description: 周K线图 Tab
-    position_hint: 图表区域左上角第 4 个
+    children: []
+    locators:
+      - type: text
+        value: 周K
+    description: 切换到周 K 图
 
-  tab_monthly_k:
+  chart_monthly_k:
     text: 月K
+    parent: chart_switch
     aliases: [月K线, 月线]
-    locator: { type: text, value: 月K }
-    region: chart_tabs
-    description: 月K线图 Tab
-    position_hint: 图表区域左上角第 5 个
+    children: []
+    locators:
+      - type: text
+        value: 月K
+    description: 切换到月 K 图
 
-  tab_minute_k:
-    text: ""
-    aliases: [分钟K, 分钟, 更多周期]
-    locator: { type: text, value: "" }  # [待确认] 可能是图标或下拉
-    region: chart_tabs
-    description: 更多周期选择（1分/5分/15分/30分/60分等）
-    position_hint: 图表区域左上角最后一项
+  chart_five_day:
+    text: 五日
+    parent: chart_switch
+    aliases: [五日分时, 五日图]
+    children: []
+    locators:
+      - type: text
+        value: 五日
+    description: 切换到五日分时图
 
-  # ═══════════════════════════════════════════
-  # 3. 指标切换 Tab (indicator_tabs)
-  # 位于图表下方，人为命名较多
-  # ═══════════════════════════════════════════
+  chart_more:
+    text: 更多
+    parent: chart_switch
+    aliases: [更多周期]
+    children:
+      - chart_120_minute
+      - chart_60_minute
+      - chart_30_minute
+      - chart_15_minute
+      - chart_5_minute
+      - chart_1_minute
+      - chart_yearly_k
+      - chart_quarterly_k
+    locators:
+      - type: text
+        value: 更多
+    description: 展开更多 K 线周期
 
-  indicator_volume:
-    text: 成交量          # [待确认] 缩写可能是"量"或"VOL"
-    aliases: [量, 成交量, VOL, 量能]
-    locator: { type: text, value: 成交量 }
-    region: indicator_tabs
-    description: 成交量指标
+  chart_120_minute:
+    text: 120分
+    parent: chart_more
+    aliases: [120分钟, 120分K]
+    children: []
+    locators:
+      - type: text
+        value: 更多
+    description: 选择 120 分钟 K 线
+    source_note: 源文档中“120分”的 text 记录为“更多”，与父级“更多”重复，需真机核验。
 
-  indicator_macd:
-    text: MACD
-    aliases: [macd, MACD指标]
-    locator: { type: text, value: MACD }
-    region: indicator_tabs
-    description: MACD 指标
+  chart_60_minute:
+    text: 60分
+    parent: chart_more
+    aliases: [60分钟, 60分K]
+    children: []
+    locators:
+      - type: text
+        value: 60分
+    description: 选择 60 分钟 K 线
 
-  indicator_kdj:
-    text: KDJ
-    aliases: [kdj, KDJ指标]
-    locator: { type: text, value: KDJ }
-    region: indicator_tabs
-    description: KDJ 指标
+  chart_30_minute:
+    text: 30分
+    parent: chart_more
+    aliases: [30分钟, 30分K]
+    children: []
+    locators:
+      - type: text
+        value: 30分
+    description: 选择 30 分钟 K 线
 
-  indicator_rsi:
-    text: RSI
-    aliases: [rsi, RSI指标]
-    locator: { type: text, value: RSI }
-    region: indicator_tabs
-    description: RSI 指标
+  chart_15_minute:
+    text: 15分
+    parent: chart_more
+    aliases: [15分钟, 15分K]
+    children: []
+    locators:
+      - type: text
+        value: 30分
+    description: 选择 15 分钟 K 线
+    source_note: 源文档中“15分”的 text 记录为“30分”，与 30 分钟条目重复，需真机核验。
 
-  indicator_more:
-    text: ""
-    aliases: [更多指标, 指标设置, 全部指标]
-    locator: { type: content_desc, value: 更多指标 }  # [待确认]
-    region: indicator_tabs
-    description: 展开更多指标选择
+  chart_5_minute:
+    text: 5分
+    parent: chart_more
+    aliases: [5分钟, 5分K]
+    children: []
+    locators:
+      - type: text
+        value: 5分
+    description: 选择 5 分钟 K 线
 
-  # ═══════════════════════════════════════════
-  # 4. 盘口区 (order_book)
-  # 买卖五档挂单，结构化数据
-  # ═══════════════════════════════════════════
+  chart_1_minute:
+    text: 1分
+    parent: chart_more
+    aliases: [1分钟, 1分K]
+    children: []
+    locators:
+      - type: text
+        value: 1分
+    description: 选择 1 分钟 K 线
 
-  buy_five:
-    text: 买五
-    aliases: [买五价, 买五量]
-    locator: { type: text, value: 买五 }
-    region: order_book
-    description: 买五档：价格+挂单量
+  chart_yearly_k:
+    text: 年K
+    parent: chart_more
+    aliases: [年K线, 年线]
+    children: []
+    locators:
+      - type: text
+        value: 年K
+    description: 选择年 K 线
 
-  buy_four:
-    text: 买四
-    aliases: [买四价, 买四量]
-    locator: { type: text, value: 买四 }
-    region: order_book
-    description: 买四档
+  chart_quarterly_k:
+    text: 季K
+    parent: chart_more
+    aliases: [季K线, 季线]
+    children: []
+    locators:
+      - type: text
+        value: 季K
+    description: 选择季 K 线
 
-  buy_three:
-    text: 买三
-    aliases: [买三价, 买三量]
-    locator: { type: text, value: 买三 }
-    region: order_book
-    description: 买三档
+  chart_settings:
+    text: 分时设置
+    parent: chart_switch
+    aliases: [图表设置, 设置分时]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/setting
+    description: 分时图设置图标
 
-  buy_two:
-    text: 买二
-    aliases: [买二价, 买二量]
-    locator: { type: text, value: 买二 }
-    region: order_book
-    description: 买二档
+  detail:
+    text: 明细
+    parent: null
+    aliases: [成交明细]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/mxText
+      - type: text
+        value: 明细
+    description: 成交明细入口
 
-  buy_one:
-    text: 买一
-    aliases: [买一价, 买一量, 买盘]
-    locator: { type: text, value: 买一 }
-    region: order_book
-    description: 买一档：最优买价
+  news:
+    text: 新闻
+    parent: null
+    aliases: [个股新闻]
+    children: [news_item]
+    locators:
+      - type: text
+        value: 新闻
+    description: 个股新闻区域
 
-  sell_one:
-    text: 卖一
-    aliases: [卖一价, 卖一量, 卖盘]
-    locator: { type: text, value: 卖一 }
-    region: order_book
-    description: 卖一档：最优卖价
+  news_item:
+    text: 新闻条目
+    parent: news
+    aliases: [第0条, 第一条新闻]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/view_newsgroup_item
+      - type: content_desc
+        value: 第0条
+    description: 新闻列表第一条内容
 
-  sell_two:
-    text: 卖二
-    aliases: [卖二价, 卖二量]
-    locator: { type: text, value: 卖二 }
-    region: order_book
-    description: 卖二档
+  order_book:
+    text: 盘口
+    parent: null
+    aliases: [盘口信息]
+    children: [order_book_all_changes]
+    locators:
+      - type: text
+        value: 盘口
+    description: 个股盘口区域
 
-  sell_three:
-    text: 卖三
-    aliases: [卖三价, 卖三量]
-    locator: { type: text, value: 卖三 }
-    region: order_book
-    description: 卖三档
+  order_book_all_changes:
+    text: 查看全部异动
+    parent: order_book
+    aliases: [全部异动]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/indexbar_show_value_info
+      - type: text
+        value: 查看全部异动
+    description: 查看全部盘口异动
 
-  sell_four:
-    text: 卖四
-    aliases: [卖四价, 卖四量]
-    locator: { type: text, value: 卖四 }
-    region: order_book
-    description: 卖四档
+  announcement:
+    text: 公告
+    parent: null
+    aliases: [个股公告]
+    children:
+      - announcement_more
+      - announcement_all
+      - announcement_performance
+      - announcement_major_event
+      - announcement_other
+    locators:
+      - type: text
+        value: 公告
+    description: 个股公告区域
 
-  sell_five:
-    text: 卖五
-    aliases: [卖五价, 卖五量]
-    locator: { type: text, value: 卖五 }
-    region: order_book
-    description: 卖五档
+  announcement_more:
+    text: 更多
+    parent: announcement
+    aliases: [更多公告]
+    children: []
+    locators:
+      - type: text
+        value: 更多
+    description: 展开公告分类或更多公告
 
-  open_price:
-    text: 开盘
-    aliases: [开盘价, 今开]
-    locator: { type: text, value: 开盘 }
-    region: order_book
-    description: 今日开盘价
+  announcement_all:
+    text: 全部公告
+    parent: announcement
+    aliases: [所有公告]
+    children: []
+    locators:
+      - type: text
+        value: 全部公告
+    description: 查看全部公告
 
-  yesterday_close:
-    text: 昨收
-    aliases: [昨收价, 昨日收盘, 前收盘]
-    locator: { type: text, value: 昨收 }
-    region: order_book
-    description: 昨日收盘价
+  announcement_performance:
+    text: 业绩公告
+    parent: announcement
+    aliases: [业绩类公告]
+    children: []
+    locators:
+      - type: text
+        value: 业绩公告
+    description: 查看业绩公告
 
-  high_price:
-    text: 最高
-    aliases: [最高价, 今日最高]
-    locator: { type: text, value: 最高 }
-    region: order_book
-    description: 今日最高价
+  announcement_major_event:
+    text: 重大事项
+    parent: announcement
+    aliases: [重大事项公告]
+    children: []
+    locators:
+      - type: text
+        value: 重大事项
+    description: 查看重大事项公告
 
-  low_price:
-    text: 最低
-    aliases: [最低价, 今日最低]
-    locator: { type: text, value: 最低 }
-    region: order_book
-    description: 今日最低价
+  announcement_other:
+    text: 其他公告
+    parent: announcement
+    aliases: [其它公告]
+    children: []
+    locators:
+      - type: text
+        value: 其他公告
+    description: 查看其他公告
 
-  turnover_volume:
-    text: 成交量
-    aliases: [成交, 总手, 成交量数据]
-    locator: { type: text, value: 成交量 }
-    region: order_book
-    description: 成交总量（手）
+  f10_summary:
+    text: 简况F10
+    parent: null
+    aliases: [简况, F10]
+    children: []
+    locators:
+      - type: text
+        value: 简况F10
+    description: 个股简况 F10 入口
 
-  turnover_amount:
-    text: 成交额
-    aliases: [成交额, 总金额]
-    locator: { type: text, value: 成交额 }
-    region: order_book
-    description: 成交总金额（元）
+  finance:
+    text: 财务
+    parent: null
+    aliases: [财务数据]
+    children: []
+    locators:
+      - type: text
+        value: 财务
+    description: 个股财务入口
 
-  # ═══════════════════════════════════════════
-  # 5. 底部功能 Tab (bottom_tabs)
-  # ═══════════════════════════════════════════
+  research_report:
+    text: 研报
+    parent: null
+    aliases: [研究报告]
+    children: [research_report_item]
+    locators:
+      - type: text
+        value: 研报
+    description: 个股研报区域
 
-  bottom_tab_capital:
-    text: 资金
-    aliases: [资金流向, 主力资金, 资金明细]
-    locator: { type: text, value: 资金 }
-    region: bottom_tabs
-    description: 资金流向页面
-    position_hint: 底部 Tab 第 1 个
+  research_report_item:
+    text: 研报条目
+    parent: research_report
+    aliases: [第一条研报]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/view_newsgroup_item
+    description: 研报列表条目；与新闻条目共用 resource-id，需结合父级区域定位。
 
-  bottom_tab_news:
-    text: 新闻           # [待确认] 可能是"资讯"或"新闻"
-    aliases: [新闻, 资讯, 公告]
-    locator: { type: text, value: 新闻 }
-    region: bottom_tabs
-    description: 个股相关新闻/资讯
-    position_hint: 底部 Tab 第 2 个
+  bottom_navigation:
+    text: 底部导航栏
+    parent: null
+    aliases: [底部操作栏]
+    children:
+      - bottom_index
+      - bottom_order
+      - bottom_diagnosis
+      - bottom_watchlist
+      - bottom_more
+    locators: []
+    description: 个股分时页底部导航区域
 
-  bottom_tab_brief:
-    text: 简况
-    aliases: [简况, 概况, 详情, F10]
-    locator: { type: text, value: 简况 }
-    region: bottom_tabs
-    description: 个股简况/F10
-    position_hint: 底部 Tab 第 3 个
+  bottom_index:
+    text: 指数
+    parent: bottom_navigation
+    aliases: [指数按钮]
+    children: [bottom_index_fenshi]
+    locators:
+      - type: resource_id
+        value: id/indexview
+      - type: position
+        value: [0.11203703703703703, 0.9448653198653199]
+        coordinate_system: normalized
+    description: 底部指数图标；保留源文档提供的归一化坐标。
 
-  bottom_tab_discuss:
-    text: 讨论
-    aliases: [讨论, 社区, 评论区]
-    locator: { type: text, value: 讨论 }
-    region: bottom_tabs
-    description: 个股讨论区
-    position_hint: 底部 Tab 第 4 个
+  bottom_index_fenshi:
+    text: 分时图
+    parent: bottom_index
+    aliases: [指数分时图]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/indexfenshi
+    description: 指数入口中的分时图元素
 
-  # ═══════════════════════════════════════════
-  # 6. 底部操作按钮 (action_buttons)
-  # ═══════════════════════════════════════════
+  bottom_order:
+    text: 下单
+    parent: bottom_navigation
+    aliases: [交易下单]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/xiadan
+    description: 底部下单图标
 
-  btn_buy:
-    text: 买入
-    aliases: [买, 下单买入, 委托买入]
-    locator: { type: text, value: 买入 }
-    region: action_buttons
-    description: 买入按钮
+  bottom_diagnosis:
+    text: 诊股
+    parent: bottom_navigation
+    aliases: [股票诊断]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/zhengu
+    description: 底部诊股图标
 
-  btn_sell:
-    text: 卖出
-    aliases: [卖, 下单卖出, 委托卖出]
-    locator: { type: text, value: 卖出 }
-    region: action_buttons
-    description: 卖出按钮
+  bottom_watchlist:
+    text: 加自选/减自选
+    parent: bottom_navigation
+    aliases: [加自选, 减自选, 自选]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/ll_add_remove_zixuan
+    description: 根据当前自选状态添加或移除股票
 
-  btn_add_watchlist:
-    text: ""
-    aliases: [加自选, 添加自选, 自选]
-    locator: { type: content_desc, value: 加自选 }  # [待确认] 可能是图标
-    region: action_buttons
-    description: 加自选按钮（纯图标）
+  bottom_more:
+    text: 更多
+    parent: bottom_navigation
+    aliases: [底部更多]
+    children: [bottom_more_settings]
+    locators:
+      - type: resource_id
+        value: id/ll_more
+    description: 底部更多图标
 
-  # ═══════════════════════════════════════════
-  # 7. 其他数据字段 (data_fields)
-  # ═══════════════════════════════════════════
-
-  turnover_rate:
-    text: 换手率
-    aliases: [换手率, 换手]
-    locator: { type: text, value: 换手率 }
-    region: data_fields
-    description: 换手率
-
-  volume_ratio:
-    text: 量比
-    aliases: [量比, 成交比]
-    locator: { type: text, value: 量比 }
-    region: data_fields
-    description: 量比
-
-  pe_ratio:
-    text: 市盈率
-    aliases: [市盈率, PE, 市盈]
-    locator: { type: text, value: 市盈率 }
-    region: data_fields
-    description: 市盈率（动/静）[待确认显示格式]
-
-  market_cap:
-    text: 总市值
-    aliases: [市值, 总市值, 流通市值]
-    locator: { type: text, value: 总市值 }
-    region: data_fields
-    description: 总市值（元）
-
-  amplitude:
-    text: 振幅
-    aliases: [振幅, 波动幅度]
-    locator: { type: text, value: 振幅 }
-    region: data_fields
-    description: 今日振幅
-
-  limit_up:
-    text: 涨停
-    aliases: [涨停价, 涨停板]
-    locator: { type: text, value: 涨停 }
-    region: data_fields
-    description: 今日涨停价
-
-  limit_down:
-    text: 跌停
-    aliases: [跌停价, 跌停板]
-    locator: { type: text, value: 跌停 }
-    region: data_fields
-    description: 今日跌停价
+  bottom_more_settings:
+    text: 设置
+    parent: bottom_more
+    aliases: [更多设置]
+    children: []
+    locators:
+      - type: text
+        value: 设置
+    description: 底部更多菜单中的设置入口

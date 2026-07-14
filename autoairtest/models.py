@@ -102,6 +102,15 @@ class NaturalLanguageTestCase:
 
 
 @dataclass(frozen=True)
+class LocatorCandidate:
+    """执行动作可按顺序尝试的结构化 UI 定位候选。"""
+
+    type: str
+    value: Any
+    coordinate_system: str = ""
+
+
+@dataclass(frozen=True)
 class PlanAction:
     """执行计划中的单个动作。
 
@@ -114,6 +123,7 @@ class PlanAction:
     target: str
     target_context: str
     preferred_locator: str
+    locators: list[LocatorCandidate] = field(default_factory=list)
     action_risk_level: ActionRiskLevel = ActionRiskLevel.LOW
     interpretation_rationale_ids: list[str] = field(default_factory=list)
 

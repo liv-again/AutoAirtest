@@ -13,10 +13,11 @@ from typing import Any
 class PocoAdapter:
     """封装 Poco 语义查询和控件操作能力的适配器。"""
 
-    def __init__(self, poco: Any | None = None) -> None:
+    def __init__(self, poco: Any | None = None, app_package: str = "") -> None:
         """探测当前环境是否已安装 Poco。"""
 
         self.poco = poco
+        self.app_package = str(app_package or "").strip()
         self.available = poco is not None or importlib.util.find_spec("poco") is not None
 
     def dump(self) -> dict[str, Any]:
@@ -70,6 +71,61 @@ class PocoAdapter:
         except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
             return {"status": "unavailable", "reason": f"poco click failed: {type(exc).__name__}: {exc}", "query": text}
         return {"status": "success", "query": text, "target": _node_summary(nodes[0])}
+
+    def query_resource_id(self, resource_id: str) -> dict[str, Any]:
+        """按 Android resource-id 查询候选控件。"""
+
+        normalized, reason = _normalize_resource_id(resource_id, self.app_package)
+        if reason:
+            return {"status": "unavailable", "reason": reason, "query": str(resource_id)}
+        poco = self._poco()
+        if poco is None:
+            return {"status": "unavailable", "reason": "poco is not installed in torch", "query": normalized}
+        try:
+            nodes = _selector_nodes(poco(normalized))
+        except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
+            return {
+                "status": "unavailable",
+                "reason": f"poco resource_id query failed: {type(exc).__name__}: {exc}",
+                "query": normalized,
+            }
+        return {
+            "status": "success",
+            "query": normalized,
+            "locator_type": "resource_id",
+            "matches": [_node_summary(node) for node in nodes],
+        }
+
+    def click_resource_id(self, resource_id: str) -> dict[str, Any]:
+        """按 Android resource-id 点击控件，短 ID 使用配置中的包名补全。"""
+
+        normalized, reason = _normalize_resource_id(resource_id, self.app_package)
+        if reason:
+            return {"status": "unavailable", "reason": reason, "query": str(resource_id)}
+        poco = self._poco()
+        if poco is None:
+            return {"status": "unavailable", "reason": "poco is not installed in torch", "query": normalized}
+        try:
+            selector = poco(normalized)
+            nodes = _selector_nodes(selector)
+            if not nodes:
+                return {"status": "unavailable", "reason": "poco target not found", "query": normalized}
+            if hasattr(selector, "click"):
+                selector.click()
+            else:
+                nodes[0].click()
+        except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
+            return {
+                "status": "unavailable",
+                "reason": f"poco resource_id click failed: {type(exc).__name__}: {exc}",
+                "query": normalized,
+            }
+        return {
+            "status": "success",
+            "query": normalized,
+            "locator_type": "resource_id",
+            "target": _node_summary(nodes[0]),
+        }
 
     def text(self, text: str) -> dict[str, Any]:
         """读取匹配控件的文本值。"""
@@ -144,6 +200,22 @@ def _elements_from_dump(raw_dump: Any) -> list[dict[str, Any]]:
 def _query_nodes(poco: Any, text: str) -> list[Any]:
     selector = poco(text=text)
     return _selector_nodes(selector)
+
+
+def _normalize_resource_id(resource_id: str, app_package: str) -> tuple[str, str]:
+    value = str(resource_id or "").strip()
+    package = str(app_package or "").strip()
+    if not value:
+        return "", "resource_id is empty"
+    if ":id/" in value:
+        return value, ""
+    if not package:
+        return "", "app package is required for short resource_id"
+    if value.startswith("id/"):
+        return f"{package}:{value}", ""
+    if "/" not in value and ":" not in value:
+        return f"{package}:id/{value}", ""
+    return "", "invalid resource_id format"
 
 
 def _selector_nodes(selector: Any) -> list[Any]:

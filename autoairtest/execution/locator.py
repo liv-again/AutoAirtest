@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from autoairtest.models import LocatorCandidate
+
 
 class Locator:
     """Poco、控件树截图联合定位、OCR 的三级定位入口。"""
@@ -20,7 +22,13 @@ class Locator:
         screenshot_path: str,
         allow_ocr: bool = True,
         ocr_evidence_path: str = "",
+        locators: list[LocatorCandidate] | None = None,
     ) -> dict[str, Any]:
+        if locators:
+            located = self._locate_with_candidates(target, locators)
+            if located["response"].get("status") == "success" or not allow_ocr:
+                return located
+            return self._ocr_fallback(target, screenshot_path, ocr_evidence_path)
         response = self.poco.click(target)
         if response.get("status") == "success":
             return {
@@ -39,6 +47,62 @@ class Locator:
                 "correction_step": None,
             }
         return self._ocr_fallback(target, screenshot_path, ocr_evidence_path)
+
+    def _locate_with_candidates(
+        self,
+        target: str,
+        locators: list[LocatorCandidate],
+    ) -> dict[str, Any]:
+        last_response: dict[str, Any] = {
+            "status": "unavailable",
+            "reason": "no supported locator candidate",
+            "query": target,
+        }
+        last_level = "poco"
+        for candidate in locators:
+            locator_type = str(candidate.type)
+            value = candidate.value
+            if locator_type == "resource_id":
+                last_level = "poco_resource_id"
+                if not hasattr(self.poco, "click_resource_id"):
+                    last_response = {
+                        "status": "unavailable",
+                        "reason": "poco adapter does not support resource_id",
+                        "query": value,
+                    }
+                    continue
+                last_response = self.poco.click_resource_id(str(value))
+            elif locator_type == "text":
+                last_level = "poco_text"
+                last_response = self.poco.click(str(value))
+            else:
+                last_level = f"poco_{locator_type}"
+                last_response = {
+                    "status": "unavailable",
+                    "reason": f"unsupported locator type: {locator_type}",
+                    "query": value,
+                }
+                continue
+            if last_response.get("status") == "success":
+                return {
+                    "locator_level": last_level,
+                    "response": last_response,
+                    "selected_element": {
+                        "text": target,
+                        "locator_type": locator_type,
+                        "value": value,
+                        "source": "poco",
+                    },
+                    "ocr_evidence": "",
+                    "correction_step": None,
+                }
+        return {
+            "locator_level": last_level,
+            "response": last_response,
+            "selected_element": None,
+            "ocr_evidence": "",
+            "correction_step": None,
+        }
 
     def locate_from_dump_and_screenshot(
         self,

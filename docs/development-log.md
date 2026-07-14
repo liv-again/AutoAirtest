@@ -65,3 +65,19 @@ Date: 2026-07-02
 - **Activity name limitation**: AirtestAdapter passes `activity` to `airtest.core.api.start_app()`, but this version of Airtest concatenates the package name incorrectly when a non-empty activity is provided. Workaround: omit `activity` from config to use automatic launcher detection.
 - **minicap incompatibility**: Device is Android 15 (SDK 36); minicap native binary doesn't support the new `SurfaceComposerClient::Transaction` symbol. javacap fallback works but may have performance implications. Requires upstream minicap update.
 - **Poco connection retries**: Poco repeatedly connects and reconnects (multiple device object updates visible in log), suggesting UI detection or connection stability issues on this device/OS version. This may affect action execution reliability in device mode.
+
+---
+
+Date: 2026-07-15
+
+## Added
+
+- Registered `skills/stock_detail/fenshi_elements_1.yaml` in `SkillRegistry`, including page-context activation, alias matching, parent-region disambiguation, and ordered locator loading.
+- Added stock-detail guidance to both LLM and rule-based planning. Matching page-local actions now carry typed locator candidates and structured rationale IDs.
+- Added Android resource-id support to the Poco main locator path. Short IDs use `app.package`, while fully qualified IDs remain unchanged.
+- Preserved the existing text-only Poco API and added ordered resource-id-to-text fallback in `Locator`.
+
+## Verification Boundary
+
+- Unit and direct-call tests cover skill registration, planner enrichment, package-qualified resource IDs, missing-package errors, locator fallback, and device-workflow propagation.
+- Real resource-id lookup still requires verification against the target App's live Poco hierarchy because resource names can vary by App build.

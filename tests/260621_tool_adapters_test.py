@@ -92,6 +92,116 @@ def test_poco_adapter_normalizes_dump_and_clicks_injected_poco():
     assert clicked == ["行情"]
 
 
+def test_poco_adapter_clicks_short_resource_id_with_configured_package():
+    selected_names = []
+
+    class FakeNode:
+        def click(self):
+            return None
+
+        def get_text(self):
+            return ""
+
+        def get_bounds(self):
+            return [0, 0, 10, 10]
+
+        def attr(self, name):
+            return {"name": selected_names[-1]}.get(name)
+
+    class FakeSelector:
+        def __iter__(self):
+            return iter([FakeNode()])
+
+        def click(self):
+            return None
+
+    class FakePoco:
+        def __call__(self, name=None, **kwargs):
+            selected_names.append(name)
+            return FakeSelector()
+
+    adapter = PocoAdapter(poco=FakePoco(), app_package="com.example.securities")
+
+    result = adapter.click_resource_id("id/backButton")
+
+    assert result["status"] == "success"
+    assert result["query"] == "com.example.securities:id/backButton"
+    assert selected_names == ["com.example.securities:id/backButton"]
+
+
+def test_poco_adapter_keeps_fully_qualified_resource_id_unchanged():
+    selected_names = []
+
+    class FakeSelector:
+        def __iter__(self):
+            return iter([self])
+
+        def click(self):
+            return None
+
+        def get_text(self):
+            return ""
+
+        def get_bounds(self):
+            return [0, 0, 10, 10]
+
+        def attr(self, name):
+            return None
+
+    class FakePoco:
+        def __call__(self, name=None, **kwargs):
+            selected_names.append(name)
+            return FakeSelector()
+
+    adapter = PocoAdapter(poco=FakePoco())
+
+    result = adapter.click_resource_id("com.vendor.app:id/backButton")
+
+    assert result["status"] == "success"
+    assert selected_names == ["com.vendor.app:id/backButton"]
+
+
+def test_poco_adapter_reports_missing_package_for_short_resource_id():
+    adapter = PocoAdapter(poco=object())
+
+    result = adapter.click_resource_id("id/backButton")
+
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "app package is required for short resource_id"
+
+
+def test_poco_adapter_accepts_bare_resource_id_name():
+    selected_names = []
+
+    class FakeSelector:
+        def __iter__(self):
+            return iter([self])
+
+        def click(self):
+            return None
+
+        def get_text(self):
+            return ""
+
+        def get_bounds(self):
+            return [0, 0, 10, 10]
+
+        def attr(self, name):
+            return None
+
+    class FakePoco:
+        def __call__(self, name=None, **kwargs):
+            selected_names.append(name)
+            return FakeSelector()
+
+    adapter = PocoAdapter(poco=FakePoco(), app_package="com.example.securities")
+
+    result = adapter.click_resource_id("backButton")
+
+    assert result["status"] == "success"
+    assert selected_names == ["com.example.securities:id/backButton"]
+
+
 def test_ocr_adapter_keeps_unavailable_without_engine(tmp_path):
     result = OCRAdapter(engine=None).recognize(str(tmp_path / "missing.png"))
 

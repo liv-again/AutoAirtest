@@ -1,4 +1,5 @@
 from autoairtest.execution.locator import Locator
+from autoairtest.models import LocatorCandidate
 
 
 class FakePoco:
@@ -81,3 +82,54 @@ def test_locator_reports_unavailable_when_ocr_has_no_match():
     assert result["locator_level"] == "ocr"
     assert result["response"]["status"] == "unavailable"
     assert result["response"]["reason"] == "ocr target not found"
+
+
+def test_locator_uses_resource_id_before_text_candidate():
+    class ResourcePoco(FakePoco):
+        def __init__(self):
+            super().__init__()
+            self.resource_ids = []
+
+        def click_resource_id(self, value):
+            self.resource_ids.append(value)
+            return {"status": "success", "query": value, "locator_type": "resource_id"}
+
+    poco = ResourcePoco()
+    result = Locator(poco, FakeOCR(), FakeAirtest()).locate_and_act(
+        "返回",
+        "screenshots/a.png",
+        locators=[
+            LocatorCandidate(type="resource_id", value="id/backButton"),
+            LocatorCandidate(type="text", value="返回"),
+        ],
+    )
+
+    assert result["locator_level"] == "poco_resource_id"
+    assert result["selected_element"]["locator_type"] == "resource_id"
+    assert poco.resource_ids == ["id/backButton"]
+    assert poco.clicks == []
+
+
+def test_locator_falls_back_from_resource_id_to_text_candidate():
+    class ResourcePoco(FakePoco):
+        def __init__(self):
+            super().__init__()
+            self.resource_ids = []
+
+        def click_resource_id(self, value):
+            self.resource_ids.append(value)
+            return {"status": "unavailable", "reason": "not found", "query": value}
+
+    poco = ResourcePoco()
+    result = Locator(poco, FakeOCR(), FakeAirtest()).locate_and_act(
+        "返回",
+        "screenshots/a.png",
+        locators=[
+            LocatorCandidate(type="resource_id", value="id/backButton"),
+            LocatorCandidate(type="text", value="返回"),
+        ],
+    )
+
+    assert result["locator_level"] == "poco_text"
+    assert poco.resource_ids == ["id/backButton"]
+    assert poco.clicks == ["返回"]

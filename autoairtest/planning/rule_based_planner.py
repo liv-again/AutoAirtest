@@ -70,6 +70,8 @@ class RuleBasedPlanner:
         """从操作描述中抽取导航、点击或观察动作。"""
 
         operation = case.operation_description
+        stock_detail_context = self._navigation_context_for(case)
+        stock_detail_element = self.skill_registry.match_stock_detail_element(stock_detail_context)
         targets: list[tuple[str, str, str, list[str]]] = []
         navigation_targets = {node.text for node in navigation_path}
         targets.extend(
@@ -112,30 +114,53 @@ class RuleBasedPlanner:
             targets.append(("tap", "点击自选顶部指数", "自选顶部指数", ["ir_self_selected_top_index"]))
         if "顶部指数" in operation and "自选顶部指数" not in operation:
             targets.append(("tap", "点击顶部指数", "顶部指数", ["ir_top_index"]))
+        if stock_detail_element is not None and stock_detail_element.locators and any(
+            verb in operation for verb in ["点击", "选择", "查看", "展开", "关闭", "设置"]
+        ) and not any(target == stock_detail_element.text for _, _, target, _ in targets):
+            rationale_id = f"ir_stock_detail_{stock_detail_element.element_id}"
+            targets.append(
+                (
+                    "tap",
+                    f"点击{stock_detail_element.text}",
+                    stock_detail_element.text,
+                    [rationale_id],
+                )
+            )
         swipe_direction = _extract_swipe_direction(operation)
         if swipe_direction:
             targets.append(("swipe", "滑动当前页面", swipe_direction, ["ir_swipe"]))
         input_text = _extract_input_text(operation)
         if input_text:
             targets.append(("text", "输入文本", input_text, ["ir_text_input"]))
-        if "返回" in operation:
+        if "返回" in operation and not (
+            stock_detail_element is not None and stock_detail_element.text == "返回"
+        ):
             targets.append(("keyevent", "返回上一页", "BACK", ["ir_back"]))
         if not targets:
             targets.append(("observe", "观察当前页面", "当前页面", ["ir_current_page"]))
 
         policy = RiskPolicy()
-        actions = [
-            PlanAction(
+        actions = []
+        for index, (intent, description, target, rationale_ids) in enumerate(targets, start=1):
+            matched_element = (
+                None
+                if intent == "navigate"
+                else self.skill_registry.match_stock_detail_element(f"{stock_detail_context} {target}")
+            )
+            actions.append(PlanAction(
                 action_id=f"a{index}",
                 intent=intent,
                 description=description,
                 target=target,
                 target_context=operation,
-                preferred_locator="poco_semantic",
+                preferred_locator=(
+                    matched_element.preferred_locator
+                    if matched_element is not None and matched_element.locators
+                    else "poco_semantic"
+                ),
+                locators=list(matched_element.locators) if matched_element is not None else [],
                 interpretation_rationale_ids=rationale_ids,
-            )
-            for index, (intent, description, target, rationale_ids) in enumerate(targets, start=1)
-        ]
+            ))
         return [replace(action, action_risk_level=policy.classify(action)) for action in actions]
 
     def _navigation_context_for(self, case: NaturalLanguageTestCase) -> str:
@@ -160,6 +185,7 @@ class RuleBasedPlanner:
         operation = case.operation_description
         navigation_context = self._navigation_context_for(case)
         rationales: list[InterpretationRationale] = []
+        stock_detail_element = self.skill_registry.match_stock_detail_element(navigation_context)
         for node in navigation_path:
             rationales.append(
                 InterpretationRationale(
@@ -183,6 +209,23 @@ class RuleBasedPlanner:
                     confidence=0.92,
                     matched_skill_rules=["navigation_alias.self_selected"],
                     basis="命中证券 App 导航别名规则：自选在当前 UI 中展示为我的自选。",
+                    human_review_required=False,
+                )
+            )
+
+        if stock_detail_element is not None and stock_detail_element.locators:
+            rationales.append(
+                InterpretationRationale(
+                    rationale_id=f"ir_stock_detail_{stock_detail_element.element_id}",
+                    original_expression=navigation_context,
+                    normalized_meaning=stock_detail_element.text,
+                    interpretation_type="stock_detail_element",
+                    confidence=0.95,
+                    matched_skill_rules=[f"stock_detail_element.{stock_detail_element.element_id}"],
+                    basis=(
+                        f"命中 stock_detail skill 元素 {stock_detail_element.element_id}，"
+                        "使用其有序定位器。"
+                    ),
                     human_review_required=False,
                 )
             )

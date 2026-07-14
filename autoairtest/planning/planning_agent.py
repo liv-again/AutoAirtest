@@ -10,6 +10,7 @@ from autoairtest.models import (
     ActionRiskLevel,
     ExecutionPlan,
     InterpretationRationale,
+    LocatorCandidate,
     NaturalLanguageTestCase,
     PlanAction,
     VerificationGoal,
@@ -30,7 +31,7 @@ class PlanningAgent:
         prompt_path: str | Path | None = None,
     ) -> None:
         self.llm_client = llm_client
-        self.rule_based_planner = rule_based_planner or RuleBasedPlanner()
+        self.rule_based_planner = rule_based_planner or RuleBasedPlanner(skill_registry=skill_registry)
         self.skill_registry = skill_registry
         self.prompt_path = Path(prompt_path) if prompt_path else Path("prompts/planner.md")
 
@@ -51,7 +52,8 @@ class PlanningAgent:
         if not isinstance(data, dict):
             return None
         try:
-            return self._apply_navigation_path(self._execution_plan_from_dict(data), case, navigation_path)
+            plan = self._apply_navigation_path(self._execution_plan_from_dict(data), case, navigation_path)
+            return self._apply_stock_detail_locators(plan, case)
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -60,9 +62,11 @@ class PlanningAgent:
         if self.prompt_path.exists():
             base_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
         navigation_section = self._navigation_prompt_section(navigation_path or [])
+        stock_detail_section = self._stock_detail_prompt_section(case)
         return (
             f"{base_prompt}\n\n"
             f"{navigation_section}\n\n"
+            f"{stock_detail_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -71,6 +75,28 @@ class PlanningAgent:
             f"expected_result: {case.expected_result}\n"
             f"parameters: {case.parameters}"
         ).strip()
+
+    def _stock_detail_prompt_section(self, case: NaturalLanguageTestCase) -> str:
+        context = self._navigation_context_for(case)
+        if self.skill_registry is None or not self.skill_registry.is_stock_detail_context(context):
+            return (
+                "Stock detail skill: not applicable. Only use this skill for page-local actions on "
+                "an individual stock detail/fenshi page."
+            )
+        element = self.skill_registry.match_stock_detail_element(context)
+        if element is None:
+            return (
+                "Stock detail skill applies to this individual stock detail/fenshi page case, but no exact "
+                "page-local element matched. Do not invent a resource_id."
+            )
+        locator_text = ", ".join(f"{item.type}={item.value}" for item in element.locators) or "none"
+        return (
+            "Stock detail skill applies to page-local actions on the individual stock detail/fenshi page. "
+            "Use stable element IDs and emit the ordered locators supplied by the skill; resource_id is "
+            "preferred for icon-only controls.\n"
+            f"- {element.element_id}: text={element.text}, aliases={list(element.aliases)}, "
+            f"locators=[{locator_text}]"
+        )
 
     def _navigation_path_for(self, case: NaturalLanguageTestCase) -> list[NavigationNode]:
         if self.skill_registry is None:
@@ -146,6 +172,68 @@ class PlanningAgent:
             interpretation_rationales=rationales,
         )
 
+    def _apply_stock_detail_locators(
+        self,
+        plan: ExecutionPlan,
+        case: NaturalLanguageTestCase,
+    ) -> ExecutionPlan:
+        if self.skill_registry is None:
+            return plan
+        case_context = self._navigation_context_for(case)
+        if not self.skill_registry.is_stock_detail_context(case_context):
+            return plan
+
+        actions: list[PlanAction] = []
+        matched_elements: dict[str, Any] = {}
+        for action in plan.actions:
+            if action.intent == "navigate":
+                actions.append(action)
+                continue
+            element = self.skill_registry.match_stock_detail_element(
+                f"{case_context} {action.target_context} {action.target}"
+            )
+            if element is None or not element.locators:
+                actions.append(action)
+                continue
+            rationale_id = f"ir_stock_detail_{element.element_id}"
+            actions.append(
+                replace(
+                    action,
+                    preferred_locator=element.preferred_locator,
+                    locators=list(element.locators),
+                    interpretation_rationale_ids=_append_unique(
+                        action.interpretation_rationale_ids,
+                        rationale_id,
+                    ),
+                )
+            )
+            matched_elements[element.element_id] = element
+
+        if not matched_elements:
+            return plan
+        rationales = list(plan.interpretation_rationales)
+        for element in matched_elements.values():
+            rationale_id = f"ir_stock_detail_{element.element_id}"
+            if any(item.rationale_id == rationale_id for item in rationales):
+                continue
+            rationales.append(
+                InterpretationRationale(
+                    rationale_id=rationale_id,
+                    original_expression=case_context,
+                    normalized_meaning=element.text,
+                    interpretation_type="stock_detail_element",
+                    confidence=0.95,
+                    matched_skill_rules=[f"stock_detail_element.{element.element_id}"],
+                    basis=f"命中 stock_detail skill 元素 {element.element_id} 的有序定位器。",
+                    human_review_required=False,
+                )
+            )
+        notes = _append_unique(
+            plan.manual_review_notes,
+            "Stock-detail actions enriched from skills/stock_detail/fenshi_elements_1.yaml.",
+        )
+        return replace(plan, actions=actions, interpretation_rationales=rationales, manual_review_notes=notes)
+
     def _navigation_rationales_for(
         self,
         case: NaturalLanguageTestCase,
@@ -210,6 +298,15 @@ class PlanningAgent:
             target=str(item["target"]),
             target_context=str(item["target_context"]),
             preferred_locator=str(item["preferred_locator"]),
+            locators=[
+                LocatorCandidate(
+                    type=str(locator.get("type", "")),
+                    value=locator.get("value"),
+                    coordinate_system=str(locator.get("coordinate_system", "")),
+                )
+                for locator in (self._dict(value) for value in self._list(item.get("locators", [])))
+                if locator.get("type") and "value" in locator
+            ],
             action_risk_level=ActionRiskLevel(str(risk)),
             interpretation_rationale_ids=[
                 str(value) for value in self._list(item.get("interpretation_rationale_ids", []))
@@ -271,6 +368,10 @@ class PlanningAgent:
 
 def _node_texts(nodes: list[NavigationNode]) -> set[str]:
     return {node.text for node in nodes}
+
+
+def _append_unique(values: list[str], value: str) -> list[str]:
+    return values if value in values else [*values, value]
 
 
 def _renumber_actions(actions: list[PlanAction]) -> list[PlanAction]:

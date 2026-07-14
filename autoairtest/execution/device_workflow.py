@@ -44,8 +44,9 @@ class DeviceWorkflow:
         evidence_config: dict[str, Any] | None = None,
         log_collector: Any | None = None,
     ) -> None:
+        self.app_config = app_config or {}
         self.airtest = airtest or AirtestAdapter()
-        self.poco = poco or PocoAdapter()
+        self.poco = poco or PocoAdapter(app_package=str(self.app_config.get("package", "")))
         self.ocr = ocr or OCRAdapter()
         self.stability_waiter_factory = stability_waiter_factory or self._default_stability_waiter
         self.correction_budget = correction_budget or {"low": 3, "medium": 1, "high": 0}
@@ -56,7 +57,6 @@ class DeviceWorkflow:
             "poco_dump_interval_seconds": 1,
             "poco_dump_backoff": "fixed",
         } | (retry_config or {})
-        self.app_config = app_config or {}
         self.log_collector = log_collector
         self.evidence_config = {
             "redact_sensitive_text": True,
@@ -311,7 +311,12 @@ class DeviceWorkflow:
             return response, key, None, None
         if action.intent in {"tap", "click"} or action.preferred_locator.startswith("poco"):
             locator = Locator(self.poco, self.ocr, self.airtest)
-            location = locator.locate_and_act(action.target, str(root / before_screenshot), allow_ocr=False)
+            location = locator.locate_and_act(
+                action.target,
+                str(root / before_screenshot),
+                allow_ocr=False,
+                locators=action.locators,
+            )
             response = location["response"]
             if response.get("status") == "success":
                 return response, action.target, None, None

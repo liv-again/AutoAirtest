@@ -1,35 +1,48 @@
 # Stock Detail
 
-个股详情页（分时页）元素定义技能。用于把测试用例中的业务目标映射到个股详情页内可定位的 UI 元素。
+证券 App 个股详情页（分时页）技能，用于把自然语言测试步骤映射为页面入口和可执行的 UI 元素定位。
 
 ## Resources
 
 - `pages.yaml`: 个股详情页的多入口路由定义。
-- `fenshi_elements_1.yaml`: 个股分时页内的元素定义（含图标定位信息）。
+- `fenshi_elements_1.yaml`: 个股分时页内的层级化元素定义，包含文字、resource-id、contentDescription 和相对坐标。
 
-## Page Entry Points
+## Page Entry Rules
 
-个股详情页无法通过单一菜单路径到达，入口分散在多个页面。路由定义见 `pages.yaml`。
+- Resolve an entry from `pages.yaml` by business context, then execute its `route` in order.
+- Treat every `node` as a stable ID from `skills/navigation/nodes.yaml`.
+- Treat every `action` as a page-local operation rather than a navigation-tree node.
+- Confirm that the destination matches `target_page.page_id` before locating page elements.
 
-## Element Location Strategy
+## Element Rules
 
-个股详情页元素定位按优先级：
+- Use stable element IDs instead of visible text as keys, because text such as “更多”和“新闻” repeats across regions.
+- Resolve aliases before element lookup.
+- Disambiguate repeated text by walking `parent` and checking the surrounding region.
+- Try each element's `locators` in listed order; combine parent context with the locator when a value is repeated.
+- Keep source values unchanged. Entries marked `source_note` reproduce a suspicious source mapping and require device verification.
 
-1. **text** — 元素有可见文字，直接用 Poco text 查询（如 "买一"、"卖一"、"换手率"）
-2. **content_desc** — 元素无文字但有 `contentDescription`（如图标按钮 "返回"、"分享"）
-3. **resource_id** — 文字和 content_desc 都不可靠时，用 resource-id 定位
-4. **position** — 以上都不可用时，用相对坐标（如 "K线图底部 Tab 区域第 2 个"）
+## Planner Activation
 
-## Human-Name Mapping
+- Activate this skill only when the test-case context identifies an individual stock detail page, stock fenshi page, or an equivalent page alias.
+- Match page-local targets by element text, aliases, and parent region; do not use this skill for global navigation nodes.
+- Attach the matched element's ordered `locators` to `PlanAction`. Prefer `resource_id` for icon-only controls.
+- If no exact stock-detail element matches, tell the planner not to invent a resource-id.
 
-`fenshi_elements_1.yaml` 中的 `aliases` 字段记录了人为命名到实际 UI 文本的映射：
+## Resource-ID Execution
 
-- 人叫"分时图" → 页面实际 Tab 为 "分时"
-- 人叫"五档盘口" → 实际包含 买一~买五、卖一~卖五 的 `position` 描述
-- 人叫"主力资金" → 实际 Tab 文字为 "资金"
+- Keep a fully qualified ID such as `com.example:id/backButton` unchanged.
+- Expand `id/backButton` to `<app.package>:id/backButton`.
+- Expand `backButton` to `<app.package>:id/backButton`.
+- If a short ID is used without `app.package`, return an explicit unavailable result instead of treating the ID as visible text.
+- Try locators in YAML order, so a later text locator can safely follow a resource-id candidate.
+
+## Extension
+
+This skill is tree-shaped in `fenshi_elements_1.yaml`: each element has at most one `parent`. Keep element IDs stable so locators can be updated without changing test-case semantics.
 
 ## Boundaries
 
-- 页面结构受 App 版本影响；resource-id 和 content_desc 需在目标版本上验证
-- position 定位依赖屏幕分辨率，当前适配 1080×2376
-- 行情数据正确性不在此技能范围内
+- The element source is `中原个股分时页.md`; it describes UI location, not quote-data correctness.
+- resource-id and contentDescription values depend on the target App version.
+- The normalized position for the bottom “指数” icon is source-provided and must be verified when resolution or layout changes.

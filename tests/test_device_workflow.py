@@ -1,10 +1,12 @@
 import json
 
+import autoairtest.execution.device_workflow as device_workflow_module
 from autoairtest.execution.device_workflow import DeviceWorkflow
 from autoairtest.models import (
     ActionRiskLevel,
     ActionStatus,
     ExecutionPlan,
+    LocatorCandidate,
     PlanAction,
     VerificationGoal,
     VerificationGoalCategory,
@@ -165,6 +167,88 @@ def test_device_workflow_success_records_screenshots_and_element_summaries(tmp_p
     assert trace[0]["action_risk_level"] == "low"
     assert trace[0]["before_evidence"] == ["screenshots/001_before_a1.png", "element_summaries/001_before_a1.json"]
     assert trace[0]["after_evidence"] == ["screenshots/001_after_a1.png", "element_summaries/001_after_a1.json"]
+
+
+def test_device_workflow_passes_plan_resource_id_locators_to_poco(tmp_path):
+    class ResourcePoco(FakePoco):
+        def __init__(self):
+            super().__init__(
+                dump_results=[
+                    {
+                        "status": "success",
+                        "visible_texts": ["返回"],
+                        "elements": [{"text": "返回"}],
+                    },
+                    {
+                        "status": "success",
+                        "visible_texts": ["个股列表"],
+                        "elements": [{"text": "个股列表"}],
+                    },
+                ]
+            )
+            self.resource_ids = []
+
+        def click_resource_id(self, value):
+            self.resource_ids.append(value)
+            return {"status": "success", "query": value, "locator_type": "resource_id"}
+
+    poco = ResourcePoco()
+    plan = ExecutionPlan(
+        case_id="TC_resource_id",
+        understanding="点击个股分时页返回图标",
+        preconditions=[],
+        actions=[
+            PlanAction(
+                action_id="a1",
+                intent="tap",
+                description="点击返回",
+                target="返回",
+                target_context="个股分时页标题栏",
+                preferred_locator="poco_resource_id",
+                locators=[LocatorCandidate(type="resource_id", value="id/backButton")],
+            )
+        ],
+        verification_goals=[],
+        manual_review_notes=[],
+    )
+    workflow = DeviceWorkflow(
+        airtest=FakeAirtest(),
+        poco=poco,
+        app_config={"package": "com.example.securities"},
+        stability_waiter_factory=lambda: type(
+            "FakeWaiter",
+            (),
+            {"wait": lambda self: {"stable": True, "attempts": 1}},
+        )(),
+    )
+
+    results = workflow.execute_plan(plan, tmp_path)
+
+    assert results[0].status == ActionStatus.SUCCESS
+    assert results[0].locator_level == "poco_resource_id"
+    assert poco.resource_ids == ["id/backButton"]
+    assert poco.clicks == []
+
+
+def test_device_workflow_configures_default_poco_with_app_package():
+    captured = []
+
+    class CapturingPocoAdapter:
+        def __init__(self, app_package=""):
+            captured.append(app_package)
+
+    original = device_workflow_module.PocoAdapter
+    device_workflow_module.PocoAdapter = CapturingPocoAdapter
+    try:
+        DeviceWorkflow(
+            airtest=FakeAirtest(),
+            ocr=FakeOCR(),
+            app_config={"package": "com.example.securities"},
+        )
+    finally:
+        device_workflow_module.PocoAdapter = original
+
+    assert captured == ["com.example.securities"]
 
 
 def test_device_workflow_unavailable_airtest_skips_explicitly(tmp_path):
