@@ -231,6 +231,9 @@ class RuleEngine:
         visible_texts, evidence_source = self._text_evidence(evidence)
         prompt = (
             "你是移动 App 测试结果初判器。只生成观察摘要，不要给最终通过结论。\n"
+            "请返回包含以下字段的 JSON 对象：\n"
+            f'  "observation_summary": "观察到的证据摘要",\n'
+            f'  "manual_review_reason": "需要人工复核的原因，若无则为空字符串"\n'
             f"验证目标: {goal.claim}\n"
             f"目标类别: {goal.category.value}\n"
             f"人工复核原因: {manual_review_reason}\n"
