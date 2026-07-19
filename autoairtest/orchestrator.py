@@ -93,6 +93,16 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     seen_crash_signatures: set[str] = set()
     log_collector = LogCollector(enabled=bool(config.get("logs", {}).get("enable_capture", True)))
 
+    # ── 设备模式下创建一次 DeviceWorkflow，复用设备连接并支持用例间导航回主框架 ──
+    device_workflow = None
+    if config.get("execution", {}).get("mode") == "device":
+        device_workflow = DeviceWorkflow(
+            correction_budget=config.get("execution", {}).get("correction_budget", {}),
+            retry_config=config.get("execution", {}).get("retry", {}),
+            app_config=config.get("app", {}),
+            evidence_config=config.get("evidence", {}),
+        )
+
     for case in cases:
         case_dir = store.create_case_dir(case.internal_id)
         case_crash_refs: list[dict[str, Any]] = []
@@ -115,12 +125,8 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
                 )
             ]
         elif config.get("execution", {}).get("mode") == "device":
-            action_results = DeviceWorkflow(
-                correction_budget=config.get("execution", {}).get("correction_budget", {}),
-                retry_config=config.get("execution", {}).get("retry", {}),
-                app_config=config.get("app", {}),
-                evidence_config=config.get("evidence", {}),
-            ).execute_plan(plan, case_dir)
+            assert device_workflow is not None
+            action_results = device_workflow.execute_plan(plan, case_dir)
         else:
             # 离线核心不执行真实点击，而是保留动作级证据结构，供后续设备适配器替换。
             action_results = [
@@ -195,7 +201,11 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             verification_evidence["llm_client"] = _verification_llm_client(config)
         max_recollection_attempts = _max_evidence_recollection_attempts(config)
         recollector = (
-            EvidenceRecollector(max_attempts=max_recollection_attempts)
+            EvidenceRecollector(
+                max_attempts=max_recollection_attempts,
+                poco=device_workflow.poco if device_workflow is not None else None,
+                airtest=device_workflow.airtest if device_workflow is not None else None,
+            )
             if max_recollection_attempts > 0
             else None
         )
@@ -238,6 +248,26 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
                 "manual_review_reason": _manual_review_reason(judgments),
             }
         )
+
+        # ── 恢复主框架：按返回键直到检测到底部导航栏 ──
+        if device_workflow is not None:
+            home_result = device_workflow.navigate_to_home()
+            store.append_jsonl(
+                "steps.jsonl",
+                {
+                    "index": step_index + 1,
+                    "case_id": case.internal_id,
+                    "action_id": "navigate_home",
+                    "result": "home_detected" if home_result["home_detected"] else "home_failed",
+                    "crash_count": 0,
+                    "notes": (
+                        [f"navigate_to_home: {home_result['back_presses']} back presses, "
+                         f"detected={home_result['home_detected']}, "
+                         f"page_texts={home_result.get('last_page_texts', [])}"]
+                    ),
+                },
+            )
+            step_index += 1
 
     excel_result_copy = ""
     if config.get("report", {}).get("write_back_excel", False):

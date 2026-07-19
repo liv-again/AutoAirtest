@@ -207,6 +207,16 @@ def run_plan_and_execute() -> Path:
     step_index = 0
     log_collector = LogCollector(enabled=bool(config.get("logs", {}).get("enable_capture", True)))
 
+    # ── 设备模式下创建一次 DeviceWorkflow，复用设备连接并支持用例间导航回主框架 ──
+    device_workflow = None
+    if config.get("execution", {}).get("mode") == "device":
+        device_workflow = DeviceWorkflow(
+            correction_budget=config.get("execution", {}).get("correction_budget", {}),
+            retry_config=config.get("execution", {}).get("retry", {}),
+            app_config=config.get("app", {}),
+            evidence_config=config.get("evidence", {}),
+        )
+
     for case in cases:
         case_dir = store.create_case_dir(case.internal_id)
         print(f"  [{case.internal_id}] planning...")
@@ -230,12 +240,8 @@ def run_plan_and_execute() -> Path:
             ]
         else:
             # ── Execution ──
-            action_results = DeviceWorkflow(
-                correction_budget=config.get("execution", {}).get("correction_budget", {}),
-                retry_config=config.get("execution", {}).get("retry", {}),
-                app_config=config.get("app", {}),
-                evidence_config=config.get("evidence", {}),
-            ).execute_plan(plan, case_dir)
+            assert device_workflow is not None, "test_plan_execute requires device mode"
+            action_results = device_workflow.execute_plan(plan, case_dir)
 
         for ar in action_results:
             step_index += 1
@@ -282,6 +288,12 @@ def run_plan_and_execute() -> Path:
                 "manual_review_reason": "verification_skipped_in_debug",
             }
         )
+
+        # ── 恢复主框架：按返回键直到检测到底部导航栏 ──
+        if device_workflow is not None:
+            home_result = device_workflow.navigate_to_home()
+            result_text = "home_detected" if home_result["home_detected"] else "home_failed"
+            print(f"    navigate_to_home: {result_text} ({home_result['back_presses']} back presses)")
 
     # ── 运行级产物 ──
     store.write_run_json(

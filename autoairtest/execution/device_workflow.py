@@ -457,6 +457,45 @@ class DeviceWorkflow:
             )
         return results, traces
 
+    def navigate_to_home(
+        self,
+        max_back_presses: int = 10,
+        back_interval_seconds: float = 0.8,
+        required_texts: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """按物理返回键直到检测到底部导航栏，确保下一用例从主框架开始。
+
+        检测方式：Poco dump 当前页面可见文本，至少匹配 required_texts 中的 3 个。
+        返回 {home_detected, back_presses, last_page_texts}。
+        """
+        if required_texts is None:
+            required_texts = ["首页", "行情", "交易", "理财", "我的"]
+
+        for press_count in range(max_back_presses + 1):
+            dump = self.poco.dump()
+            visible = [str(item) for item in dump.get("visible_texts", []) if isinstance(item, str)]
+            matched = [item for item in visible if item in required_texts]
+
+            if len(matched) >= 3:
+                return {
+                    "home_detected": True,
+                    "back_presses": press_count,
+                    "last_page_texts": visible[:30],
+                }
+
+            if press_count < max_back_presses:
+                self.airtest.keyevent("BACK")
+                import time
+                time.sleep(back_interval_seconds)
+
+        dump = self.poco.dump()
+        visible = [str(item) for item in dump.get("visible_texts", []) if isinstance(item, str)]
+        return {
+            "home_detected": False,
+            "back_presses": max_back_presses,
+            "last_page_texts": visible[:30],
+        }
+
     def _perform_ocr_degraded_action(
         self,
         action: PlanAction,
