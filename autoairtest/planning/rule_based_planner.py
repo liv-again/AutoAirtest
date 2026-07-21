@@ -261,15 +261,35 @@ class RuleBasedPlanner:
         return rationales
 
     def _goals_for(self, case: NaturalLanguageTestCase) -> list[VerificationGoal]:
-        """从预期结果和操作描述中抽取验证目标。"""
+        """从预期结果和操作描述中抽取验证目标。
 
+        验证目标生成策略参考 skills/expected_result_rules/SKILL.md 中的
+        预期结果解读规则：跳转成功、交易成功、排序、市场代码。
+        """
         text = f"{case.expected_result} {case.operation_description}"
         goals: list[VerificationGoal] = []
 
         if "跳转" in text:
             goals.append(self._goal("页面跳转符合预期", VerificationGoalCategory.PAGE_NAVIGATION))
-        if "弹框" in text:
+        if "弹框" in text or "弹窗" in text:
             goals.append(self._goal("指数分时图弹框展示", VerificationGoalCategory.POPUP_DISPLAY))
+        if "交易" in text or "委托" in text:
+            # 交易/委托成功：弹窗中应包含订单标识关键词
+            goals.append(
+                self._goal(
+                    "交易或委托成功后弹窗存在订单标识",
+                    VerificationGoalCategory.POPUP_DISPLAY,
+                    expected_entities=["订单号", "订单编号", "委托编号"],
+                )
+            )
+        if order_entities := self._detect_order_entities(text):
+            goals.append(
+                self._goal(
+                    f"指数/项目顺序正确",
+                    VerificationGoalCategory.ELEMENT_ORDER,
+                    expected_entities=order_entities,
+                )
+            )
         if "排第四" in text or "第四位" in text:
             goals.append(
                 self._goal(
@@ -278,32 +298,28 @@ class RuleBasedPlanner:
                     expected_entities=DEFAULT_DOMESTIC_ORDER,
                 )
             )
-        if "行业板块" in text:
-            goals.append(
-                self._goal(
-                    "有行业板块时指数顺序正确",
-                    VerificationGoalCategory.ELEMENT_ORDER,
-                    expected_entities=DETAIL_WITH_INDUSTRY_ORDER,
+        if self.skill_registry and self.skill_registry.market_codes:
+            matched_markets = [m for m in self.skill_registry.market_names() if m in text]
+            if matched_markets:
+                goals.append(
+                    self._goal(
+                        f"页面股票代码属于预期市场: {', '.join(matched_markets)}",
+                        VerificationGoalCategory.DATA_CORRECTNESS,
+                        expected_entities=matched_markets,
+                    )
                 )
-            )
-        elif "上证指数、深证成指、科创综指、北证50、创业板指" in text:
-            goals.append(
-                self._goal(
-                    "无行业板块时指数顺序正确",
-                    VerificationGoalCategory.ELEMENT_ORDER,
-                    expected_entities=DETAIL_WITHOUT_INDUSTRY_ORDER,
-                )
-            )
         if "数据" in text or "一致" in text:
             # 行情数据正确性缺少外部 Oracle，MVP 中必须进入人工复核。
-            goals.append(
-                self._goal(
-                    "行情数据正确性或两端一致性需要人工复核",
-                    VerificationGoalCategory.DATA_CORRECTNESS,
-                    human_review_required=True,
-                    review_reason="market data correctness requires human review",
+            # 但如果已有更具体的市场代码验证目标，则不再生成通用数据正确性目标。
+            if not any("市场" in g.claim or "股票代码" in g.claim for g in goals):
+                goals.append(
+                    self._goal(
+                        "行情数据正确性或两端一致性需要人工复核",
+                        VerificationGoalCategory.DATA_CORRECTNESS,
+                        human_review_required=True,
+                        review_reason="market data correctness requires human review",
+                    )
                 )
-            )
         if "红涨绿跌黑平" in text or "颜色" in text:
             # 颜色规则依赖视觉证据和业务口径，离线核心不作最终裁决。
             goals.append(
@@ -329,6 +345,24 @@ class RuleBasedPlanner:
             )
             for index, goal in enumerate(goals, start=1)
         ]
+
+    def _detect_order_entities(self, text: str) -> list[str]:
+        """从预期结果文本中检测需要验证顺序的实体列表。
+
+        支持两种模式：
+        1. 明确枚举：如“展示指数及顺序为：上证指数、深证成指、北证50”
+        2. 预设模板：行业板块/无行业板块的指数顺序
+        """
+        if "行业板块" in text:
+            return list(DETAIL_WITH_INDUSTRY_ORDER)
+        order_match = re.search(r"顺序[为是：:]\s*(.+)", text)
+        if order_match:
+            raw = order_match.group(1)
+            entities = re.split(r"[、，,\s]+", raw.strip())
+            return [e for e in entities if e]
+        if "上证指数、深证成指、科创综指、北证50、创业板指" in text:
+            return list(DETAIL_WITHOUT_INDUSTRY_ORDER)
+        return []
 
     def _goal(
         self,

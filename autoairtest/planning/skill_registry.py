@@ -56,6 +56,14 @@ class StockDetailEntry:
     route: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True)
+class MarketCodeRule:
+    """单个市场的股票代码前缀规则。"""
+
+    name: str
+    prefixes: tuple[str, ...]
+
+
 class SkillRegistry:
     """加载规划技能资源，并提供别名归一化查询。"""
 
@@ -74,6 +82,8 @@ class SkillRegistry:
             self.stock_detail_elements,
         ) = self._load_stock_detail_elements()
         self.stock_detail_page_id = stock_detail_element_page_id or stock_detail_route_page_id
+        self.market_codes = self._load_market_codes()
+        self.trade_success_keywords: tuple[str, ...] = ("订单号", "订单编号", "委托编号")
 
     def resolve_alias(self, text: str) -> str:
         """返回导航别名的归一化文本。"""
@@ -390,6 +400,39 @@ class SkillRegistry:
             depth += 1
             current_id = parent
         return depth
+
+
+    def _load_market_codes(self) -> dict[str, MarketCodeRule]:
+        """加载 stock market code 前缀规则。"""
+        codes_path = self.skills_root / "expected_result_rules" / "market_codes.yaml"
+        if not codes_path.exists():
+            return {}
+        payload = self._load_yaml_or_simple_map(codes_path)
+        raw_markets = payload.get("markets", []) if isinstance(payload, dict) else []
+        if not isinstance(raw_markets, list):
+            return {}
+        codes: dict[str, MarketCodeRule] = {}
+        for item in raw_markets:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", ""))
+            prefixes = tuple(str(p) for p in _list_or_empty(item.get("prefixes")))
+            if name and prefixes:
+                codes[name] = MarketCodeRule(name=name, prefixes=prefixes)
+        return codes
+
+    def match_market_by_code(self, stock_code: str) -> str:
+        """根据股票代码前缀返回所属市场名称，无匹配时返回空字符串。"""
+        if not stock_code or not self.market_codes:
+            return ""
+        for market in self.market_codes.values():
+            if any(stock_code.startswith(prefix) for prefix in market.prefixes):
+                return market.name
+        return ""
+
+    def market_names(self) -> list[str]:
+        """返回所有已注册的市场名称。"""
+        return list(self.market_codes.keys())
 
 
 def _list_or_empty(value: Any) -> list[Any]:

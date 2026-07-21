@@ -213,6 +213,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             recollector=recollector,
             max_recollection_attempts=max_recollection_attempts,
             initial_judgment_provider=verify_goals,
+            market_code_prefixes=_market_code_prefixes_from_registry(skill_registry),
         ).verify(plan.verification_goals, verification_evidence, case_dir)
         judgments = verification_result.judgments
         evidence_recollection_trace = verification_result.recollection_trace
@@ -485,6 +486,13 @@ def _parse_case_parameters(raw_parameters: str) -> dict[str, str]:
 
 
 # 将验证阶段的证据补采过程追加写入统一执行轨迹文件。
+def _market_code_prefixes_from_registry(skill_registry: SkillRegistry) -> dict[str, list[str]]:
+    """从技能注册表中提取市场代码前缀映射，供验证引擎使用。"""
+    if not skill_registry.market_codes:
+        return {}
+    return {name: list(rule.prefixes) for name, rule in skill_registry.market_codes.items()}
+
+
 def _append_evidence_recollection_execution_trace(
     case_dir: Path,
     recollection_trace: list[dict[str, Any]],

@@ -29,8 +29,9 @@ class VerificationAgent:
             [list[VerificationGoal], dict[str, object]], list[PreliminaryJudgment]
         ]
         | None = None,
+        market_code_prefixes: dict[str, list[str]] | None = None,
     ) -> None:
-        self.rule_engine = rule_engine or RuleEngine()
+        self.rule_engine = rule_engine or RuleEngine(market_code_prefixes=market_code_prefixes)
         self.recollector = recollector
         self.max_recollection_attempts = max_recollection_attempts
         self.initial_judgment_provider = initial_judgment_provider

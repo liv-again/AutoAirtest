@@ -63,10 +63,12 @@ class PlanningAgent:
             base_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
         navigation_section = self._navigation_prompt_section(navigation_path or [])
         stock_detail_section = self._stock_detail_prompt_section(case)
+        expected_result_section = self._expected_result_rules_section()
         return (
             f"{base_prompt}\n\n"
             f"{navigation_section}\n\n"
             f"{stock_detail_section}\n\n"
+            f"{expected_result_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -96,6 +98,37 @@ class PlanningAgent:
             "preferred for icon-only controls.\n"
             f"- {element.element_id}: text={element.text}, aliases={list(element.aliases)}, "
             f"locators=[{locator_text}]"
+        )
+
+    def _expected_result_rules_section(self) -> str:
+        """加载并注入预期结果解读规则到 LLM prompt。
+
+        让 LLM 在生成 VerificationGoal 时遵循项目约定的验证规则：
+        - 跳转成功 → expected_entities 填入目标页面名（如"上证A股"）
+        - 交易成功 → expected_entities 填入订单标识关键词
+        - 排序 → 使用 ELEMENT_ORDER 类别，expected_entities 填入顺序实体
+        - 市场代码 → 使用 DATA_CORRECTNESS 类别，expected_entities 填入市场名
+        """
+        if self.skill_registry is None:
+            return ""
+        rules_path = self.skill_registry.skills_root / "expected_result_rules" / "SKILL.md"
+        if not rules_path.exists():
+            return ""
+        rules_text = rules_path.read_text(encoding="utf-8").strip()
+        if not rules_text:
+            return ""
+        return (
+            "以下是预期结果的解读规则（来自 skills/expected_result_rules），"
+            "请严格遵循这些规则来生成 verification_goals：\n\n"
+            f"{rules_text}\n\n"
+            "在生成 VerificationGoal 时：\n"
+            '- 跳转验证：category="page_navigation"，expected_entities 填入预期跳转到的页面名称（如"上证A股"）\n'
+            '- 交易/委托验证：category="popup_display"，expected_entities 填入 ["订单号", "订单编号", "委托编号"]\n'
+            '- 排序验证：category="element_order"，expected_entities 填入预期顺序的实体列表\n'
+            '- 市场代码验证：category="data_correctness"，expected_entities 填入市场名称（如"上证A股"）\n'
+            '- 通用文本存在验证：category="text_present"，expected_entities 填入要检测的文本\n'
+            "所有 verification_goals 的 evidence_priority 统一为 "
+            '["poco_tree", "ocr_text", "screenshot"]'
         )
 
     def _navigation_path_for(self, case: NaturalLanguageTestCase) -> list[NavigationNode]:
