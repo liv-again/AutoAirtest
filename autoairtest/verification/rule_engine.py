@@ -5,10 +5,14 @@
   - 交易成功/委托成功：弹窗中存在订单标识关键词
   - 排序：相对顺序匹配（无需相邻）
   - 市场代码：股票代码前缀归属验证
+  - 数据展示完整性：实体附近是否存在数值字段
+  - 数据格式校验：数值字段是否匹配预期格式
+  - 跨页面实体一致性：同名实体是否在两个页面均存在
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from autoairtest.models import (
@@ -21,6 +25,30 @@ from autoairtest.verification.judgment_policy import JudgmentPolicy
 
 # 交易/委托成功时的订单标识关键词
 TRADE_SUCCESS_KEYWORDS: tuple[str, ...] = ("订单号", "订单编号", "委托编号")
+
+# 数据格式校验的正则模式
+_FORMAT_PATTERNS: list[tuple[str, str]] = [
+    ("price", r"^\d{1,6}\.\d{2}$"),
+    ("change_amount", r"^[+-]\d{1,6}\.\d{2}$"),
+    ("change_rate", r"^[+-]\d{1,6}\.\d{2}%$"),
+    ("volume", r"^\d+(\.\d+)?[万亿]$"),
+    ("stock_code", r"^\d{6}$"),
+]
+
+# 格式校验的候选值收集模式：匹配任何可能为数值的字符串（含 OCR 误识别）
+# OCR 可能把 "0" 识别为 "O"、"o"，"." 识别为 "O"
+_FORMAT_CANDIDATE_PATTERN = re.compile(
+    r"^[+-]?\d+[.O0o][0-9O0o]*%?$"   # 价格/涨跌额/涨跌幅（含 OCR 误识别）
+    r"|^\d{6}$"                         # 股票代码
+    r"|^\d+(\.\d+)?[万亿]$"              # 成交额
+)
+
+# 数值检测正则（宽松匹配，用于数据展示完整性检查）
+_NUMERIC_PATTERN = re.compile(r"[+-]?\d+\.?\d*[%万亿]?")
+
+# DATA_CORRECTNESS 子类型的 review_reason 标识
+_REVIEW_REASON_DISPLAY = "data_display_completeness"
+_REVIEW_REASON_CROSS_PAGE = "cross_page_consistency"
 
 
 class RuleEngine:
@@ -61,8 +89,16 @@ class RuleEngine:
             if conflict:
                 return self._conflicting_evidence_judgment(goal, evidence, conflict)
             return self._verify_text_presence(goal, visible_texts, evidence, evidence_source)
-        if goal.category == VerificationGoalCategory.DATA_CORRECTNESS and self._is_market_code_goal(goal):
-            return self._verify_market_code(goal, visible_texts, evidence, evidence_source)
+        if goal.category == VerificationGoalCategory.DATA_CORRECTNESS:
+            # 按优先级尝试各自动规则：市场代码 → 数据格式 → 跨页面一致性 → 数据展示完整性
+            if self._is_market_code_goal(goal):
+                return self._verify_market_code(goal, visible_texts, evidence, evidence_source)
+            if self._is_data_format_goal(goal):
+                return self._verify_data_format(goal, visible_texts, evidence, evidence_source)
+            if self._is_cross_page_goal(goal):
+                return self._verify_cross_page_consistency(goal, evidence)
+            if self._is_data_display_goal(goal):
+                return self._verify_data_display_completeness(goal, visible_texts, evidence, evidence_source)
 
         return PreliminaryJudgment(
             goal_id=goal.goal_id,
@@ -203,7 +239,6 @@ class RuleEngine:
         遍历可见文本，提取数字字符串作为候选股票代码，按 market_code_prefixes
         的前缀规则判定所属市场，并与验证目标中声明的预期市场做比对。
         """
-        import re
         candidate_codes = [t for t in visible_texts if re.fullmatch(r"\d{6}", str(t))]
         if not candidate_codes:
             return PreliminaryJudgment(
@@ -257,6 +292,278 @@ class RuleEngine:
                 "markets_matched": matched_markets,
                 "expected_markets": expected_markets,
             },
+        )
+
+    # ── 规则5: 数据展示完整性 ──
+
+    def _is_data_display_goal(self, goal: VerificationGoal) -> bool:
+        """通过 review_reason 或 claim 关键词判定是否为数据展示完整性场景。
+
+        LLM planner 按照 expected_result_rules prompt 规范，在生成此类验证目标时
+        会将 review_reason 设为 "data_display_completeness"。
+        规则型 planner 也通过 claim 中的"展示/显示"关键词来触发。
+        """
+        if goal.review_reason == _REVIEW_REASON_DISPLAY:
+            return True
+        if any(kw in goal.claim for kw in ("展示", "显示", "数据展示")):
+            return bool(goal.expected_entities)
+        return False
+
+    def _verify_data_display_completeness(
+        self,
+        goal: VerificationGoal,
+        visible_texts: list[str],
+        evidence: dict[str, object],
+        evidence_source: str,
+    ) -> PreliminaryJudgment:
+        """验证每个预期实体附近是否存在数值字段。
+
+        根据 expected_result_rules 规则5：在 visible_texts 中定位每个
+        expected_entity，向后扫描 1~5 个相邻项，检测是否存在数值。
+        全部实体附近均有数值 → pass；任一实体附近无数值 → fail。
+        """
+        entities = goal.expected_entities or []
+        if not entities:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.UNCERTAIN,
+                confidence=0.0,
+                basis="No expected entities provided for data display check.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details={"evidence_source": evidence_source},
+            )
+
+        entity_results: dict[str, list[str]] = {}
+        for entity in entities:
+            if entity not in visible_texts:
+                continue
+            idx = visible_texts.index(entity)
+            # 向后扫描最多 20 项，覆盖页面标题到数据行的距离
+            window = visible_texts[idx + 1 : idx + 21]
+            neighbor_numbers = [t for t in window if _NUMERIC_PATTERN.fullmatch(str(t))]
+            entity_results[entity] = neighbor_numbers
+
+        missing_entities = [e for e in entities if e not in entity_results]
+        empty_entities = [e for e, nums in entity_results.items() if not nums]
+        all_have_numbers = not missing_entities and not empty_entities
+
+        structured_details = {
+            "expected_entities": entities,
+            "entity_neighbor_numbers": entity_results,
+            "missing_entities": missing_entities,
+            "entities_without_numbers": empty_entities,
+            "observed_total": len(visible_texts),
+            "evidence_source": evidence_source,
+        }
+
+        if all_have_numbers:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.PASS,
+                confidence=0.78,
+                basis=(
+                    f"All {len(entities)} expected entities have numeric data nearby: "
+                    f"{ {e: nums[:2] for e, nums in entity_results.items()} }"
+                ),
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details=structured_details,
+            )
+        basis_parts = []
+        if missing_entities:
+            basis_parts.append(f"missing={missing_entities}")
+        if empty_entities:
+            basis_parts.append(f"no_numeric_near={empty_entities}")
+        return PreliminaryJudgment(
+            goal_id=goal.goal_id,
+            preliminary_status=PreliminaryStatus.FAIL,
+            confidence=0.82,
+            basis="; ".join(basis_parts),
+            evidence_files=list(evidence.get("evidence_files", [])),
+            human_review_required=False,
+            review_reason="",
+            structured_details=structured_details,
+        )
+
+    # ── 规则6: 数据格式校验 ──
+
+    def _is_data_format_goal(self, goal: VerificationGoal) -> bool:
+        """通过 expected_entities 中的格式标识判定是否为数据格式校验场景。
+
+        LLM planner 在生成此类验证目标时，expected_entities 会包含格式类型名
+        （如 "price"、"change_rate"）。
+        """
+        format_names = {name for name, _ in _FORMAT_PATTERNS}
+        return any(e in format_names for e in (goal.expected_entities or []))
+
+    def _verify_data_format(
+        self,
+        goal: VerificationGoal,
+        visible_texts: list[str],
+        evidence: dict[str, object],
+        evidence_source: str,
+    ) -> PreliminaryJudgment:
+        """校验界面数值字段是否匹配预期格式。
+
+        根据 expected_result_rules 规则6：对可见文本中的数值字段进行格式检查，
+        识别 OCR 误识别（如 3867.O3）。只标记不符合格式的异常项，
+        不校验数值语义。
+        """
+        # 从 expected_entities 中提取要校验的格式名
+        format_names = [e for e in (goal.expected_entities or [])
+                        if e in {name for name, _ in _FORMAT_PATTERNS}]
+
+        # 收集所有候选数值（含 OCR 误识别，如 3867.O3）
+        candidates = [t for t in visible_texts if _FORMAT_CANDIDATE_PATTERN.fullmatch(str(t))]
+        if not candidates:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.UNCERTAIN,
+                confidence=0.0,
+                basis="No numeric candidates found in visible texts.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details={"evidence_source": evidence_source},
+            )
+
+        # 对每个候选值尝试所有格式
+        malformed: dict[str, list[str]] = {}
+        for value in candidates:
+            value_str = str(value)
+            matched_any = False
+            for fmt_name, pattern in _FORMAT_PATTERNS:
+                if re.fullmatch(pattern, value_str):
+                    matched_any = True
+                    break
+            if not matched_any:
+                malformed.setdefault("unrecognized", []).append(value_str)
+
+        structured_details = {
+            "candidates": candidates,
+            "malformed": malformed,
+            "format_names_requested": format_names,
+            "evidence_source": evidence_source,
+        }
+
+        if not malformed:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.PASS,
+                confidence=0.80,
+                basis=f"All {len(candidates)} numeric candidates match known data formats.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details=structured_details,
+            )
+
+        return PreliminaryJudgment(
+            goal_id=goal.goal_id,
+            preliminary_status=PreliminaryStatus.FAIL,
+            confidence=0.85,
+            basis=f"Malformed numeric values detected: {malformed}",
+            evidence_files=list(evidence.get("evidence_files", [])),
+            human_review_required=False,
+            review_reason="",
+            structured_details=structured_details,
+        )
+
+    # ── 规则7: 跨页面实体一致性 ──
+
+    def _is_cross_page_goal(self, goal: VerificationGoal) -> bool:
+        """通过 review_reason 判定是否为跨页面实体一致性场景。"""
+        return goal.review_reason == _REVIEW_REASON_CROSS_PAGE
+
+    def _verify_cross_page_consistency(
+        self,
+        goal: VerificationGoal,
+        evidence: dict[str, object],
+    ) -> PreliminaryJudgment:
+        """验证同名实体在两个页面中均存在。
+
+        根据 expected_result_rules 规则7：从 current_page_evidence 和
+        cross_page_evidence 中分别定位 expected_entity。
+        两侧均存在 → pass；一侧缺失 → fail；交叉页证据未采集 → uncertain。
+        """
+        entities = goal.expected_entities or []
+        if not entities:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.UNCERTAIN,
+                confidence=0.0,
+                basis="No expected entities provided for cross-page check.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+            )
+
+        # 当前页证据
+        current_texts, current_source = self._text_evidence(evidence)
+
+        # 交叉页证据
+        cross_evidence = evidence.get("cross_page_evidence")
+        if not isinstance(cross_evidence, dict):
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.UNCERTAIN,
+                confidence=0.0,
+                basis="Cross-page evidence not collected; cannot verify entity consistency.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details={"current_source": current_source},
+            )
+
+        cross_texts, cross_source = self._text_evidence(cross_evidence)
+
+        results: dict[str, dict[str, bool]] = {}
+        for entity in entities:
+            current_present = entity in current_texts or entity in " ".join(current_texts)
+            cross_present = entity in cross_texts or entity in " ".join(cross_texts)
+            results[entity] = {
+                "current_page": current_present,
+                "cross_page": cross_present,
+            }
+
+        missing_current = [e for e, r in results.items() if not r["current_page"]]
+        missing_cross = [e for e, r in results.items() if not r["cross_page"]]
+
+        structured_details = {
+            "entity_results": results,
+            "current_source": current_source,
+            "cross_source": cross_source,
+        }
+
+        if not missing_current and not missing_cross:
+            return PreliminaryJudgment(
+                goal_id=goal.goal_id,
+                preliminary_status=PreliminaryStatus.PASS,
+                confidence=0.75,
+                basis=f"All {len(entities)} entities found in both current and cross-page evidence.",
+                evidence_files=list(evidence.get("evidence_files", [])),
+                human_review_required=False,
+                review_reason="",
+                structured_details=structured_details,
+            )
+
+        failed_reasons = []
+        if missing_current:
+            failed_reasons.append(f"missing_in_current={missing_current}")
+        if missing_cross:
+            failed_reasons.append(f"missing_in_cross={missing_cross}")
+        return PreliminaryJudgment(
+            goal_id=goal.goal_id,
+            preliminary_status=PreliminaryStatus.FAIL,
+            confidence=0.82,
+            basis="; ".join(failed_reasons),
+            evidence_files=list(evidence.get("evidence_files", [])),
+            human_review_required=False,
+            review_reason="",
+            structured_details=structured_details,
         )
 
     def _text_evidence(self, evidence: dict[str, object]) -> tuple[list[str], str]:

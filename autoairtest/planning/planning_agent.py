@@ -61,12 +61,12 @@ class PlanningAgent:
         base_prompt = ""
         if self.prompt_path.exists():
             base_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
-        navigation_section = self._navigation_prompt_section(navigation_path or [])
         stock_detail_section = self._stock_detail_prompt_section(case)
         expected_result_section = self._expected_result_rules_section()
+        nav_constraint = self._nav_context_section(navigation_path or [])
         return (
             f"{base_prompt}\n\n"
-            f"{navigation_section}\n\n"
+            f"{nav_constraint}\n\n"
             f"{stock_detail_section}\n\n"
             f"{expected_result_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
@@ -77,6 +77,31 @@ class PlanningAgent:
             f"expected_result: {case.expected_result}\n"
             f"parameters: {case.parameters}"
         ).strip()
+
+    def _nav_context_section(self, navigation_path: list[NavigationNode]) -> str:
+        """构建导航上下文提示，告知 LLM 当前页面和执行规则。"""
+        if not navigation_path:
+            return (
+                "Navigation actions (intent='navigate') are resolved by the system via skills/navigation/nodes.yaml. "
+                "You MUST NOT generate any actions with intent='navigate'. "
+                "Allowed intent values: observe, tap, swipe, text, keyevent. Do NOT use any other value. "
+                "Only generate observe, tap, swipe, text, keyevent actions."
+            )
+        path_text = " -> ".join(node.text for node in navigation_path)
+        final_page = navigation_path[-1].text if navigation_path else ""
+        return (
+            f"系统已完成导航，当前位于页面: 「{final_page}」\n"
+            f"导航路径: {path_text}\n\n"
+            "规则:\n"
+            "1. 你绝对不能生成 intent='navigate' 的动作，导航已由系统完成。\n"
+            f"2. 当前已在「{final_page}」页面，不要重复点击已导航到的目标。\n"
+            "3. 离开关键页面前（tap 跳转到其他页面），必须先在当前页面做一个 observe 采集数据。\n"
+            "   模式: observe(当前页数据) → tap(跳转) → observe(新页数据)\n"
+            "4. 如果用例只验证当前页内容，只需 observe，不要 tap 跳走。\n"
+            "5. tap 的目标必须是页面上真实存在的可点击文本，不要编造不存在的内容。\n"
+            "6. intent 必须使用以下值之一: observe, tap, swipe, text, keyevent。不能使用其他任何词。\n"
+            "   示例: {{\"intent\": \"observe\", ...}} 正确；{{\"intent\": \"采集数据\", ...}} 错误。\n"
+        )
 
     def _stock_detail_prompt_section(self, case: NaturalLanguageTestCase) -> str:
         context = self._navigation_context_for(case)
@@ -126,6 +151,12 @@ class PlanningAgent:
             '- 交易/委托验证：category="popup_display"，expected_entities 填入 ["订单号", "订单编号", "委托编号"]\n'
             '- 排序验证：category="element_order"，expected_entities 填入预期顺序的实体列表\n'
             '- 市场代码验证：category="data_correctness"，expected_entities 填入市场名称（如"上证A股"）\n'
+            '- 数据展示完整性：category="data_correctness"，expected_entities 填入页面标识实体'
+            '（如页面标题"上证A股"、指数名称如"上证指数"、或股票代码如"600000"）。'
+            '不要填列名/表头（"代码""名称""最新""涨幅"）。'
+            'review_reason="data_display_completeness"，human_review_required=false\n'
+            '- 跨页面实体一致性：category="data_correctness"，expected_entities 填入要对比的实体，'
+            '在 review_reason 中注明 "cross_page_consistency"\n'
             '- 通用文本存在验证：category="text_present"，expected_entities 填入要检测的文本\n'
             "所有 verification_goals 的 evidence_priority 统一为 "
             '["poco_tree", "ocr_text", "screenshot"]'
@@ -187,7 +218,7 @@ class PlanningAgent:
             for index, node in enumerate(navigation_path, start=1)
         ]
         remaining_actions = [
-            action for action in plan.actions if action.intent != "navigate" and action.target not in _node_texts(navigation_path)
+            action for action in plan.actions if action.intent != "navigate"
         ]
         renumbered_actions = _renumber_actions([*navigation_actions, *remaining_actions])
         rationales = _merge_rationales(

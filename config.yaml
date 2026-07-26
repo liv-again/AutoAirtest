@@ -1,0 +1,30 @@
+llm:
+  enabled: true
+  provider: openai_compatible
+  base_url: https://api.deepseek.com/
+  chat_completions_path: /chat/completions
+  api_key_env: OPENAI_API_KEY
+  api_key: "sk-ef93558b67e14694ae10e728eb5718e9"
+  model: deepseek-v4-pro
+  temperature: 0.1
+  max_retries: 2
+  timeout_seconds: 60
+  use_for_planning: true
+  use_for_verification: true
+  response_format_json: true
+  system_prompt: 你是移动 App 测试结果初判助手。只输出符合 schema 的 JSON。
+
+device:
+  platform: android_real_device
+  adb_serial: "c923178d"
+  unlock_before_run: true
+
+app:
+  package: com.hexin.plat.android.ZhongyuanSecurity
+
+execution:
+  mode: device
+
+input:
+  excel_path: docs/test_1.xlsx
+  sheet_name: 需求测试报告

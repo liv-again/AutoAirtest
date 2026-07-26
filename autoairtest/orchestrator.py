@@ -191,7 +191,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             _update_state_graph_from_actions(state_graph, case.internal_id, case_dir, action_results)
         _write_case_log(case_dir, case, action_results, plan, config)
         verification_evidence = {
-            "visible_texts": [],
+            "visible_texts": _collect_visible_texts(case_dir),
             "evidence_files": [],
             "llm_preliminary_judgment": bool(
                 config.get("verification", {}).get("llm_preliminary_judgment", False)
@@ -699,3 +699,29 @@ def _write_case_log(
     lines.append("=" * 60)
 
     (case_dir / "logs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _collect_visible_texts(case_dir: Path) -> list[str]:
+    """Collect all visible texts from element_summaries in the case directory.
+
+    遍历执行过程中采集的所有 element_summary JSON 文件，合并 visible_texts。
+    去重但保留顺序（文本首次出现的位置即为页面中的原始顺序）。
+    """
+    summaries_dir = case_dir / "element_summaries"
+    if not summaries_dir.exists():
+        return []
+    seen: set[str] = set()
+    texts: list[str] = []
+    for summary_file in sorted(summaries_dir.iterdir()):
+        if not summary_file.suffix == ".json":
+            continue
+        try:
+            data = json.loads(summary_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for text in data.get("visible_texts", []):
+            t = str(text).strip()
+            if t and t not in seen:
+                seen.add(t)
+                texts.append(t)
+    return texts

@@ -58,6 +58,8 @@ class DeviceWorkflow:
             "poco_dump_backoff": "fixed",
         } | (retry_config or {})
         self.log_collector = log_collector
+        self._device_connected = False
+        self._app_started = False
         self.evidence_config = {
             "redact_sensitive_text": True,
             "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
@@ -245,10 +247,23 @@ class DeviceWorkflow:
 
         if action_response.get("status") == "success" and not page_evidence_unchanged:
             status = ActionStatus.SUCCESS
+        elif page_evidence_unchanged and action.intent == "navigate" and action_response.get("status") == "success":
+            status = ActionStatus.SUCCESS
         elif page_evidence_unchanged:
             status = ActionStatus.BLOCKED
         else:
             status = ActionStatus.FAILED
+        action_notes: list[str] = []
+        if status == ActionStatus.SUCCESS and page_evidence_unchanged:
+            action_notes.append(f"navigation target '{action.target}' clicked but page unchanged; treating as success.")
+        action_notes.append(f"page_stability={wait_result}")
+        if status != ActionStatus.SUCCESS:
+            if page_evidence_unchanged and no_response_retry:
+                action_notes.insert(0, "page_evidence_unchanged_after_retry")
+            elif page_evidence_unchanged:
+                action_notes.insert(0, "page_evidence_unchanged")
+            elif not page_evidence_unchanged:
+                action_notes.insert(0, str(action_response.get("reason", "action failed")))
         action_result = ActionResult(
             action_id=action.action_id,
             status=status,
@@ -258,17 +273,10 @@ class DeviceWorkflow:
             after_screenshot=after_screenshot if after_snapshot.get("status") != "unavailable" else "",
             element_summary_before=before_summary,
             element_summary_after=after_summary,
-            notes=[f"page_stability={wait_result}"]
-            if status == ActionStatus.SUCCESS
-            else [
-                "page_evidence_unchanged_after_retry"
-                if page_evidence_unchanged and no_response_retry
-                else "page_evidence_unchanged"
-                if page_evidence_unchanged
-                else str(action_response.get("reason", "action failed")),
-                f"page_stability={wait_result}",
-            ],
+            notes=action_notes,
         )
+        if status == ActionStatus.SUCCESS and page_evidence_unchanged:
+            action_result.notes.insert(0, f"navigation target '{action.target}' clicked but page unchanged; treating as success.")
         return action_result, _trace(
             index,
             action,
@@ -364,9 +372,13 @@ class DeviceWorkflow:
         return response, action.target, None, None
 
     def _prepare_device(self) -> dict[str, Any]:
-        connect = self.airtest.connect()
-        if not _ready_status(connect, {"connected", "success"}):
-            return {"status": "blocked", "phase": "connect", "connect": connect}
+        if not self._device_connected:
+            connect = self.airtest.connect()
+            if not _ready_status(connect, {"connected", "success"}):
+                return {"status": "blocked", "phase": "connect", "connect": connect}
+            self._device_connected = True
+        else:
+            connect = {"status": "reused", "reason": "device already connected"}
 
         package = str(self.app_config.get("package", ""))
         activity = str(self.app_config.get("activity", ""))
@@ -378,9 +390,18 @@ class DeviceWorkflow:
                 "start_app": {"status": "skipped", "reason": "app package not configured"},
             }
 
+        if self._app_started:
+            return {
+                "status": "ready",
+                "phase": "prepared",
+                "connect": connect,
+                "start_app": {"status": "skipped", "reason": "app already running; continuing from current page"},
+            }
+
         start_app = self._start_app_with_retry(package, activity)
         if not _ready_status(start_app, {"success", "started"}):
             return {"status": "blocked", "phase": "start_app", "connect": connect, "start_app": start_app}
+        self._app_started = True
         return {"status": "ready", "phase": "prepared", "connect": connect, "start_app": start_app}
 
     def _start_app_with_retry(self, package: str, activity: str) -> dict[str, Any]:
@@ -522,7 +543,7 @@ class DeviceWorkflow:
         }
 
     def _default_stability_waiter(self) -> PageStabilityWaiter:
-        return PageStabilityWaiter(sampler=lambda: _dump_signature(self.poco.dump()))
+        return PageStabilityWaiter(max_attempts=3, sampler=lambda: _dump_signature(self.poco.dump()))
 
     def _correction_budget_for(self, action: PlanAction) -> int:
         return RiskPolicy(self.correction_budget).correction_budget(action.action_risk_level)
