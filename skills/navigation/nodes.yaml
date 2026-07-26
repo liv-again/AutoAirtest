@@ -1,6 +1,5 @@
 version: 1
 schema: navigation_tree_nodes
-source: ../../中原证券菜单结构.md
 roots:
   - home
   - market
