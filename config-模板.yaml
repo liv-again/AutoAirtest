@@ -4,7 +4,7 @@ llm:
   base_url: https://api.deepseek.com/
   chat_completions_path: /chat/completions
   api_key_env: OPENAI_API_KEY
-  api_key: "sk-ef93558b67e14694ae10e728eb5718e9"
+  api_key: "你的API KEY"
   model: deepseek-v4-pro
   temperature: 0.1
   max_retries: 2
@@ -16,7 +16,7 @@ llm:
 
 device:
   platform: android_real_device
-  adb_serial: "c923178d"
+  adb_serial: "你的设备序列号"
   unlock_before_run: true
 
 app:

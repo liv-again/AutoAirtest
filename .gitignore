@@ -16,4 +16,5 @@ docs/*.xlsx
 *.p12
 *.pfx
 config.local.*
+config.yaml
 config.template.json
