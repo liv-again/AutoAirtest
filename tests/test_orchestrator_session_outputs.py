@@ -277,22 +277,43 @@ def test_run_offline_uses_device_workflow_when_execution_mode_is_device(tmp_path
             return {"home_detected": True, "back_presses": 0, "last_page_texts": []}
 
     workflow_kwargs = {}
+    fake_workflow = FakeDeviceWorkflow()
+    recollector_kwargs = {}
 
     def fake_device_workflow(*args, **kwargs):
         workflow_kwargs.update(kwargs)
-        return FakeDeviceWorkflow()
+        return fake_workflow
+
+    class FakeEvidenceRecollector:
+        def __init__(self, max_attempts=2, poco=None, airtest=None):
+            recollector_kwargs.update(
+                {
+                    "max_attempts": max_attempts,
+                    "poco": poco,
+                    "airtest": airtest,
+                }
+            )
+
+        def recollect(self, goal_id, case_dir, attempt):
+            return {
+                "status": "collected",
+                "goal_id": goal_id,
+                "attempt": attempt,
+                "action": "refresh_current_screen_evidence",
+                "action_risk_level": "low",
+            }
 
     monkeypatch.setattr(orchestrator, "DeviceWorkflow", fake_device_workflow)
+    monkeypatch.setattr(orchestrator, "EvidenceRecollector", FakeEvidenceRecollector)
 
     run_dir = orchestrator.run_offline(
         {
-                "execution": {"mode": "device", "retry": {"poco_dump_max_attempts": 5}},
-                "app": {"package": "com.example.securities", "activity": ".MainActivity"},
-                "evidence": {"redact_sensitive_text": False, "sensitive_keywords": ["手机号"]},
-                "verification": {"evidence_recollection": {"max_attempts": 0}},
-                "report": {"output_dir": str(tmp_path), "generate_html": False},
-                "logs": {"enable_capture": False},
-                "input": {"case_filter": ""},
+            "execution": {"mode": "device", "retry": {"poco_dump_max_attempts": 5}},
+            "app": {"package": "com.example.securities", "activity": ".MainActivity"},
+            "evidence": {"redact_sensitive_text": False, "sensitive_keywords": ["手机号"]},
+            "report": {"output_dir": str(tmp_path), "generate_html": False},
+            "logs": {"enable_capture": False},
+            "input": {"case_filter": ""},
         }
     )
 
@@ -302,6 +323,9 @@ def test_run_offline_uses_device_workflow_when_execution_mode_is_device(tmp_path
     assert workflow_kwargs["app_config"]["activity"] == ".MainActivity"
     assert workflow_kwargs["evidence_config"]["redact_sensitive_text"] is False
     assert workflow_kwargs["evidence_config"]["sensitive_keywords"] == ["手机号"]
+    assert recollector_kwargs["max_attempts"] == 2
+    assert recollector_kwargs["poco"] is fake_workflow.poco
+    assert recollector_kwargs["airtest"] is fake_workflow.airtest
 
 
 def test_run_offline_recollects_evidence_for_verification_gap(tmp_path, monkeypatch):
@@ -467,11 +491,11 @@ def test_run_offline_updates_state_graph_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "DeviceWorkflow", lambda *args, **kwargs: FakeDeviceWorkflow())
 
     run_dir = orchestrator.run_offline(
-            {
-                "execution": {"mode": "device", "enable_state_graph": True},
-                "verification": {"evidence_recollection": {"max_attempts": 0}},
-                "report": {"output_dir": str(tmp_path), "generate_html": False},
-                "logs": {"enable_capture": False},
+        {
+            "execution": {"mode": "device", "enable_state_graph": True},
+            "verification": {"evidence_recollection": {"max_attempts": 0}},
+            "report": {"output_dir": str(tmp_path), "generate_html": False},
+            "logs": {"enable_capture": False},
             "input": {"case_filter": ""},
         }
     )

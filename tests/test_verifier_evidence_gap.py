@@ -273,6 +273,27 @@ def test_order_extra_text_does_not_create_poco_ocr_conflict():
     ]
 
 
+def test_order_duplicate_expected_entity_requires_matching_occurrences():
+    goal = VerificationGoal(
+        goal_id="v1",
+        claim="A-A-B order is shown",
+        category=VerificationGoalCategory.ELEMENT_ORDER,
+        expected_entities=["A", "A", "B"],
+        evidence_priority=["poco_tree"],
+        human_review_required=False,
+        review_reason="",
+    )
+
+    [judgment] = verify_goals(
+        [goal],
+        {"visible_texts": ["A", "B"], "evidence_files": ["elements.json"]},
+    )
+
+    assert judgment.preliminary_status == PreliminaryStatus.MANUAL_REQUIRED
+    assert judgment.manual_review_reason == "verification_evidence_gap"
+    assert judgment.structured_details["missing"] == ["A"]
+
+
 def test_order_conflict_between_poco_and_ocr_requires_manual_review():
     goal = VerificationGoal(
         goal_id="v1",

@@ -148,7 +148,7 @@ class RuleEngine:
         根据 expected_result_rules 中的排序规则：只要预期结果中的相对顺序能对
         上就行，无需相邻。预期实体之间可以夹有其他字段。
         """
-        missing = [expected for expected in goal.expected_entities if expected not in visible_texts]
+        missing = self._missing_order_entities(goal.expected_entities, visible_texts)
         # Filter visible_texts to only expected entities for order comparison.
         # Extra items between expected entities are allowed — per the "相对顺序匹配" rule.
         filtered = [text for text in visible_texts if text in goal.expected_entities]
@@ -184,10 +184,8 @@ class RuleEngine:
                 structured_details=structured_details,
             )
 
-        # Check relative order: each expected item's position in filtered list
-        # must be strictly increasing.
-        positions = [filtered.index(expected) for expected in goal.expected_entities if expected in filtered]
-        passed = positions == sorted(positions)
+        positions = self._relative_order_positions(goal.expected_entities, filtered)
+        passed = self._order_status(goal.expected_entities, visible_texts) == "pass"
         return PreliminaryJudgment(
             goal_id=goal.goal_id,
             preliminary_status=PreliminaryStatus.PASS if passed else PreliminaryStatus.FAIL,
@@ -623,12 +621,38 @@ class RuleEngine:
         }
 
     def _order_status(self, expected_entities: list[str], observed_texts: list[str]) -> str:
-        missing = [expected for expected in expected_entities if expected not in observed_texts]
+        if not expected_entities:
+            return "uncertain"
+        missing = self._missing_order_entities(expected_entities, observed_texts)
         if missing:
             return "gap"
         filtered = [text for text in observed_texts if text in expected_entities]
-        positions = [filtered.index(expected) for expected in expected_entities]
-        return "pass" if positions == sorted(positions) else "fail"
+        positions = self._relative_order_positions(expected_entities, filtered)
+        return "pass" if len(positions) == len(expected_entities) else "fail"
+
+    def _missing_order_entities(self, expected_entities: list[str], observed_texts: list[str]) -> list[str]:
+        available_counts: dict[str, int] = {}
+        for text in observed_texts:
+            available_counts[text] = available_counts.get(text, 0) + 1
+        missing: list[str] = []
+        for expected in expected_entities:
+            if available_counts.get(expected, 0) > 0:
+                available_counts[expected] -= 1
+            else:
+                missing.append(expected)
+        return missing
+
+    def _relative_order_positions(self, expected_entities: list[str], filtered_texts: list[str]) -> list[int]:
+        positions: list[int] = []
+        cursor = 0
+        for expected in expected_entities:
+            while cursor < len(filtered_texts) and filtered_texts[cursor] != expected:
+                cursor += 1
+            if cursor >= len(filtered_texts):
+                break
+            positions.append(cursor)
+            cursor += 1
+        return positions
 
     def _text_presence_status(self, expected_entities: list[str], observed_texts: list[str]) -> str:
         haystack = " ".join(observed_texts)

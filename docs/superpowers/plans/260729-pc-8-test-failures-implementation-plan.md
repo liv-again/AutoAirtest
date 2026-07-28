@@ -452,3 +452,47 @@ Expected: `git diff --check` 无输出；实现改动均已提交；没有无关
 - 不存在旧编排器适配器兼容层。
 - 额外顺序文本被过滤而不是误判。
 - 全量测试、编译检查和补丁检查通过。
+
+### Task 6: 处理合并前代码审查意见
+
+**Files:**
+- Modify: `autoairtest/verification/rule_engine.py`
+- Modify: `tests/test_verifier_evidence_gap.py`
+- Modify: `tests/test_orchestrator_session_outputs.py`
+
+- [x] **Step 1: 用失败测试证明重复预期实体存在假阳性**
+
+`expected_entities=["A", "A", "B"]`、`visible_texts=["A", "B"]` 在修复前错误
+返回 `pass`；新增测试期望 `manual_required/verification_evidence_gap` 且缺失一个
+`"A"`，RED 结果为实际 `pass`。
+
+- [x] **Step 2: 用出现次数与逐项消费算法统一两条顺序路径**
+
+空预期返回 `uncertain`；缺失判断考虑重复次数；主验证和冲突检测均用逐项消费后的
+匹配位置决定相对顺序。
+
+- [x] **Step 3: 验证重复、附加文本和真实逆序场景**
+
+Run:
+
+```powershell
+python -m pytest -q tests/test_verifier_evidence_gap.py
+```
+
+Expected: `12 passed`。
+
+- [x] **Step 4: 覆盖设备模式补采适配器身份复用**
+
+在 `test_run_offline_uses_device_workflow_when_execution_mode_is_device` 中启用默认补采
+构造流程，并使用 `is` 断言 `EvidenceRecollector` 收到的 `poco`、`airtest` 与
+`FakeDeviceWorkflow` 持有的对象相同。
+
+- [x] **Step 5: 修正会话测试字典缩进并运行三个相关测试**
+
+Run:
+
+```powershell
+python -m pytest -q tests/test_orchestrator_session_outputs.py::test_run_offline_uses_device_workflow_when_execution_mode_is_device tests/test_orchestrator_session_outputs.py::test_run_offline_recollects_evidence_for_verification_gap tests/test_orchestrator_session_outputs.py::test_run_offline_updates_state_graph_when_enabled
+```
+
+Expected: `3 passed`。
