@@ -624,10 +624,10 @@ class RuleEngine:
 
     def _order_status(self, expected_entities: list[str], observed_texts: list[str]) -> str:
         missing = [expected for expected in expected_entities if expected not in observed_texts]
-        unexpected = [text for text in observed_texts if text not in expected_entities]
-        if missing or unexpected:
+        if missing:
             return "gap"
-        positions = [observed_texts.index(expected) for expected in expected_entities]
+        filtered = [text for text in observed_texts if text in expected_entities]
+        positions = [filtered.index(expected) for expected in expected_entities]
         return "pass" if positions == sorted(positions) else "fail"
 
     def _text_presence_status(self, expected_entities: list[str], observed_texts: list[str]) -> str:

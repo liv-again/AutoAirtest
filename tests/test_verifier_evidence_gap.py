@@ -241,6 +241,36 @@ def test_order_verification_can_use_ocr_text_evidence_when_poco_text_is_absent()
     assert judgment.structured_details["evidence_source"] == "ocr_text"
 
 
+def test_order_extra_text_does_not_create_poco_ocr_conflict():
+    goal = VerificationGoal(
+        goal_id="v1",
+        claim="指数顺序正确",
+        category=VerificationGoalCategory.ELEMENT_ORDER,
+        expected_entities=["上证指数", "深证成指", "北证50", "科创综指"],
+        evidence_priority=["poco_tree", "ocr_text"],
+        human_review_required=False,
+        review_reason="",
+    )
+
+    [judgment] = verify_goals(
+        [goal],
+        {
+            "visible_texts": ["指数列表", "上证指数", "最新价", "深证成指", "北证50", "科创综指"],
+            "ocr_texts": ["上证指数", "深证成指", "北证50", "科创综指"],
+            "evidence_files": ["element_summaries/090_verify.json", "ocr/090_verify.json"],
+        },
+    )
+
+    assert judgment.preliminary_status == PreliminaryStatus.PASS
+    assert judgment.manual_review_reason == ""
+    assert judgment.structured_details["filtered_for_order"] == [
+        "上证指数",
+        "深证成指",
+        "北证50",
+        "科创综指",
+    ]
+
+
 def test_order_conflict_between_poco_and_ocr_requires_manual_review():
     goal = VerificationGoal(
         goal_id="v1",
