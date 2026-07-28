@@ -785,28 +785,17 @@ client.json_call(
 )
 ```
 
-- [ ] **Step 4: Correct directly encountered stale verifier assertions**
-
-The baseline currently expects `unexpected`, while current order analysis intentionally exposes `filtered_for_order`. Update only the two stale assertions in `tests/test_verifier_evidence_gap.py` to the current production contract:
-
-```python
-assert judgment.structured_details["filtered_for_order"] == ["A", "B", "C"]
-assert "unexpected" not in judgment.structured_details
-```
-
-For the `["A", "B", "C", "E"]` case, assert the same filtered sequence and missing `D`; do not modify unrelated RuleEngine production behavior.
-
-- [ ] **Step 5: Run Verifier tests to verify GREEN**
+- [ ] **Step 4: Run the new Verifier tests to verify GREEN**
 
 Run:
 
 ```powershell
-python -m pytest -q -p no:cacheprovider --basetemp=C:\tmp\260729-llm-task4-green tests/test_verifier_evidence_gap.py tests/260622_rule_engine_test.py
+python -m pytest -q -p no:cacheprovider --basetemp=C:\tmp\260729-llm-task4-green tests/test_verifier_evidence_gap.py -k "stable_prompt_file or cwd or llm_observation"
 ```
 
-Expected: all selected tests PASS.
+Expected: all selected LLM-focused tests PASS. The two acknowledged order-detail baseline failures remain outside scope and are not selected by this command.
 
-- [ ] **Step 6: Commit Task 4**
+- [ ] **Step 5: Commit Task 4**
 
 ```powershell
 git add autoairtest/verification/rule_engine.py tests/test_verifier_evidence_gap.py
@@ -1092,8 +1081,7 @@ Expected completion condition:
 
 - No newly failing test.
 - The directly related Planner failure is fixed.
-- The two stale Verifier assertions are fixed as part of the approved direct LLM test surface.
-- The remaining six unrelated device/orchestrator/rationale/step-budget failures may remain and must be reported by exact test name.
+- The remaining eight unrelated device/orchestrator/rationale/step-budget/order-detail failures may remain and must be reported by exact test name.
 
 - [ ] **Step 5: Check code quality and repository state**
 
