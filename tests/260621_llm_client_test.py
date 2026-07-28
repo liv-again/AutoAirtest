@@ -190,6 +190,29 @@ def test_llm_client_ignores_invalid_usage_fields_without_losing_business_result(
     assert result["usage"]["cache_hit_ratio"] == 0.8
 
 
+def test_llm_client_reports_inconsistent_prompt_usage_without_rewriting_provider_values():
+    client = LLMClient(
+        provider=lambda payload: {
+            "content": '{"status":"pass"}',
+            "usage": {
+                "prompt_tokens": 12,
+                "prompt_cache_hit_tokens": 8,
+                "prompt_cache_miss_tokens": 3,
+            },
+        }
+    )
+
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["data"] == {"status": "pass"}
+    assert result["attempt_usage"][0]["prompt_tokens"] == 12
+    assert result["attempt_usage"][0]["prompt_cache_hit_tokens"] == 8
+    assert result["attempt_usage"][0]["prompt_cache_miss_tokens"] == 3
+    assert result["attempt_usage"][0]["diagnostics"] == [
+        "prompt_tokens does not equal prompt_cache_hit_tokens + prompt_cache_miss_tokens"
+    ]
+
+
 def test_llm_client_emits_one_sanitized_telemetry_record_per_attempt(monkeypatch):
     records = []
     sleeps = []

@@ -305,6 +305,16 @@ def _normalize_usage(value: Any) -> dict[str, Any]:
     miss = normalized.get("prompt_cache_miss_tokens")
     if isinstance(hit, int) and isinstance(miss, int) and hit + miss > 0:
         normalized["cache_hit_ratio"] = hit / (hit + miss)
+    prompt_tokens = normalized.get("prompt_tokens")
+    if (
+        isinstance(prompt_tokens, int)
+        and isinstance(hit, int)
+        and isinstance(miss, int)
+        and prompt_tokens != hit + miss
+    ):
+        normalized["diagnostics"] = [
+            "prompt_tokens does not equal prompt_cache_hit_tokens + prompt_cache_miss_tokens"
+        ]
     return normalized
 
 
@@ -321,6 +331,13 @@ def _aggregate_usage(attempt_usage: list[dict[str, Any]]) -> dict[str, Any]:
     miss = aggregated.get("prompt_cache_miss_tokens")
     if isinstance(hit, int) and isinstance(miss, int) and hit + miss > 0:
         aggregated["cache_hit_ratio"] = hit / (hit + miss)
+    diagnostics = [
+        str(diagnostic)
+        for item in available
+        for diagnostic in item.get("diagnostics", [])
+    ]
+    if diagnostics:
+        aggregated["diagnostics"] = list(dict.fromkeys(diagnostics))
     return aggregated
 
 

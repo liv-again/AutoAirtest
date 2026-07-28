@@ -49,7 +49,7 @@ class PlanningAgent:
         navigation_path = self._navigation_path_for(case)
         try:
             prompt = self._planner_prompt(case, navigation_path)
-        except OSError:
+        except (OSError, ValueError):
             return None
         result = self.llm_client.json_call(
             prompt,
@@ -149,10 +149,10 @@ class PlanningAgent:
             return ""
         rules_path = self.skill_registry.skills_root / "expected_result_rules" / "SKILL.md"
         if not rules_path.exists():
-            return ""
+            raise FileNotFoundError(f"Expected-result rules not found: {rules_path}")
         rules_text = rules_path.read_text(encoding="utf-8").strip()
         if not rules_text:
-            return ""
+            raise ValueError(f"Expected-result rules are empty: {rules_path}")
         return (
             "以下是预期结果的解读规则（来自 skills/expected_result_rules），"
             "请严格遵循这些规则来生成 verification_goals：\n\n"

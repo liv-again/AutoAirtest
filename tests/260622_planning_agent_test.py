@@ -29,6 +29,15 @@ def _common_prefix(values):
     return prefix
 
 
+def _write_expected_result_rules(tmp_path):
+    rules_dir = tmp_path / "skills" / "expected_result_rules"
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    rules_dir.joinpath("SKILL.md").write_text(
+        "# Expected Result Rules\n\nReturn structured verification goals.",
+        encoding="utf-8",
+    )
+
+
 def _case():
     return NaturalLanguageTestCase(
         case_id="TC_1",
@@ -95,7 +104,21 @@ def test_planner_passes_non_sensitive_call_context():
     assert llm.calls[0]["context"] == {"stage": "planning", "case_id": "TC_1"}
 
 
+def test_planner_missing_stable_rules_falls_back_without_calling_llm(tmp_path):
+    llm = CapturingLLMClient()
+    agent = PlanningAgent(
+        llm_client=llm,
+        skill_registry=SkillRegistry(tmp_path / "skills"),
+    )
+
+    plan = agent.plan(_case())
+
+    assert llm.calls == []
+    assert plan.llm_used is False
+
+
 def test_planning_agent_constrains_llm_plan_with_navigation_skill(tmp_path):
+    _write_expected_result_rules(tmp_path)
     skill_dir = tmp_path / "skills" / "navigation"
     skill_dir.mkdir(parents=True)
     skill_dir.joinpath("nodes.yaml").write_text(
@@ -247,6 +270,7 @@ elements:
 
 
 def test_planning_agent_injects_stock_detail_usage_and_enriches_llm_action(tmp_path):
+    _write_expected_result_rules(tmp_path)
     _write_stock_detail_skill(tmp_path)
 
     class FakeLLMClient:
@@ -361,6 +385,7 @@ nodes:
 
 
 def test_llm_planner_does_not_apply_page_local_locator_to_navigation_action(tmp_path):
+    _write_expected_result_rules(tmp_path)
     _write_stock_detail_skill(tmp_path)
     _write_navigation_search_skill(tmp_path)
 
