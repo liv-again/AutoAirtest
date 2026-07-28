@@ -1,5 +1,10 @@
+from pathlib import Path
+
 from autoairtest.agents.verifier import verify_goals
 from autoairtest.models import PreliminaryStatus, VerificationGoal, VerificationGoalCategory
+from autoairtest.verification.rule_engine import RuleEngine
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_order_gap_requires_manual_review_with_structured_details():
@@ -78,8 +83,8 @@ def test_data_correctness_can_include_llm_observation_without_finalizing_result(
     calls = []
 
     class FakeLLMClient:
-        def json_call(self, prompt, schema):
-            calls.append({"prompt": prompt, "schema": schema})
+        def json_call(self, prompt, schema, **kwargs):
+            calls.append({"prompt": prompt, "schema": schema, **kwargs})
             return {
                 "status": "success",
                 "data": {
@@ -107,6 +112,88 @@ def test_data_correctness_can_include_llm_observation_without_finalizing_result(
     assert judgment.structured_details["llm_status"] == "success"
     assert calls
     assert calls[0]["schema"]["required"] == ["observation_summary", "manual_review_reason"]
+    assert calls[0]["context"] == {
+        "stage": "verification",
+        "case_id": "",
+        "goal_id": "v1",
+    }
+
+
+def test_verifier_uses_stable_prompt_file_before_dynamic_evidence(tmp_path):
+    prompt_path = tmp_path / "verifier.md"
+    prompt_path.write_text("STABLE VERIFIER CONTRACT", encoding="utf-8")
+    calls = []
+
+    class FakeLLMClient:
+        def json_call(self, prompt, schema, **kwargs):
+            calls.append({"prompt": prompt, "schema": schema, **kwargs})
+            return {"status": "unavailable"}
+
+    engine = RuleEngine(prompt_path=prompt_path)
+    goal = VerificationGoal(
+        goal_id="v1",
+        claim="动态目标",
+        category=VerificationGoalCategory.DATA_CORRECTNESS,
+        expected_entities=["科创综指"],
+        evidence_priority=["poco_tree"],
+        human_review_required=True,
+        review_reason="data_correctness",
+    )
+
+    engine._llm_observation_details(
+        goal,
+        {
+            "llm_preliminary_judgment": True,
+            "llm_client": FakeLLMClient(),
+            "case_id": "TC_1",
+            "visible_texts": ["动态证据"],
+            "evidence_files": ["screen.png"],
+        },
+        "data_correctness",
+    )
+
+    prompt = calls[0]["prompt"]
+    assert prompt.startswith("STABLE VERIFIER CONTRACT")
+    assert prompt.index("STABLE VERIFIER CONTRACT") < prompt.index("动态目标")
+    assert calls[0]["context"] == {
+        "stage": "verification",
+        "case_id": "TC_1",
+        "goal_id": "v1",
+    }
+
+
+def test_verifier_default_prompt_path_does_not_depend_on_current_directory(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeLLMClient:
+        def json_call(self, prompt, schema, **kwargs):
+            calls.append(prompt)
+            return {"status": "unavailable"}
+
+    monkeypatch.chdir(tmp_path)
+    engine = RuleEngine()
+    goal = VerificationGoal(
+        goal_id="v1",
+        claim="动态目标",
+        category=VerificationGoalCategory.DATA_CORRECTNESS,
+        expected_entities=[],
+        evidence_priority=["screenshot"],
+        human_review_required=True,
+        review_reason="data_correctness",
+    )
+
+    engine._llm_observation_details(
+        goal,
+        {
+            "llm_preliminary_judgment": True,
+            "llm_client": FakeLLMClient(),
+            "visible_texts": [],
+            "evidence_files": [],
+        },
+        "data_correctness",
+    )
+
+    assert calls[0].startswith("# Verifier Prompt")
 
 
 def test_text_presence_can_use_ocr_text_evidence_when_poco_text_is_absent():

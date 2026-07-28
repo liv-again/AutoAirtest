@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from autoairtest.models import (
@@ -50,6 +51,9 @@ _NUMERIC_PATTERN = re.compile(r"[+-]?\d+\.?\d*[%万亿]?")
 _REVIEW_REASON_DISPLAY = "data_display_completeness"
 _REVIEW_REASON_CROSS_PAGE = "cross_page_consistency"
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_VERIFIER_PROMPT = _PROJECT_ROOT / "prompts" / "verifier.md"
+
 
 class RuleEngine:
     """基于结构化界面证据对单个验证目标给出初判。
@@ -62,9 +66,11 @@ class RuleEngine:
         self,
         policy: JudgmentPolicy | None = None,
         market_code_prefixes: dict[str, list[str]] | None = None,
+        prompt_path: str | Path | None = None,
     ) -> None:
         self.policy = policy or JudgmentPolicy()
         self.market_code_prefixes = market_code_prefixes or {}
+        self.prompt_path = Path(prompt_path) if prompt_path else _DEFAULT_VERIFIER_PROMPT
 
     def register_market_codes(self, prefixes: dict[str, list[str]]) -> None:
         """注册或更新市场代码前缀映射。"""
@@ -656,11 +662,12 @@ class RuleEngine:
             return {}
 
         visible_texts, evidence_source = self._text_evidence(evidence)
+        try:
+            stable_prompt = self._verifier_prompt()
+        except OSError as exc:
+            return {"llm_status": "unavailable", "llm_reason": str(exc)}
         prompt = (
-            "你是移动 App 测试结果初判器。只生成观察摘要，不要给最终通过结论。\n"
-            "请返回包含以下字段的 JSON 对象：\n"
-            f'  "observation_summary": "观察到的证据摘要",\n'
-            f'  "manual_review_reason": "需要人工复核的原因，若无则为空字符串"\n'
+            f"{stable_prompt}\n\n"
             f"验证目标: {goal.claim}\n"
             f"目标类别: {goal.category.value}\n"
             f"人工复核原因: {manual_review_reason}\n"
@@ -669,7 +676,15 @@ class RuleEngine:
             f"证据文件: {list(evidence.get('evidence_files', []))}"
         )
         schema = {"type": "object", "required": ["observation_summary", "manual_review_reason"]}
-        result = client.json_call(prompt, schema)
+        result = client.json_call(
+            prompt,
+            schema,
+            context={
+                "stage": "verification",
+                "case_id": str(evidence.get("case_id", "")),
+                "goal_id": goal.goal_id,
+            },
+        )
         status = str(result.get("status", "unknown"))
         details: dict[str, Any] = {"llm_status": status}
         if status == "success":
@@ -681,3 +696,8 @@ class RuleEngine:
         elif status != "unavailable":
             details["llm_reason"] = str(result.get("reason", ""))
         return details
+
+    def _verifier_prompt(self) -> str:
+        if not self.prompt_path.is_file():
+            raise FileNotFoundError(f"Verifier prompt not found: {self.prompt_path}")
+        return self.prompt_path.read_text(encoding="utf-8").strip()
