@@ -33,5 +33,10 @@ def test_run_offline_writes_interpretation_rationales_json(tmp_path, monkeypatch
     rationales_path = run_dir / "cases" / "TC_alias" / "interpretation_rationales.json"
     assert rationales_path.exists()
     rationales = json.loads(rationales_path.read_text(encoding="utf-8"))
-    assert rationales[0]["original_expression"] == "自选"
-    assert rationales[0]["normalized_meaning"] == "我的自选"
+    [alias_rationale] = [
+        item
+        for item in rationales
+        if item["interpretation_type"] == "navigation_alias"
+    ]
+    assert alias_rationale["original_expression"] == "自选"
+    assert alias_rationale["normalized_meaning"] == "我的自选"

@@ -486,9 +486,11 @@ def test_run_offline_blocks_case_when_plan_exceeds_max_steps(tmp_path, monkeypat
         }
     )
 
-    action_results = json.loads(
-        (run_dir / "cases" / "TC_step_budget" / "action_results.json").read_text(encoding="utf-8")
-    )
+    case_dir = run_dir / "cases" / "TC_step_budget"
+    execution_plan = json.loads((case_dir / "execution_plan.json").read_text(encoding="utf-8"))
+    planned_action_count = len(execution_plan["actions"])
+    action_results = json.loads((case_dir / "action_results.json").read_text(encoding="utf-8"))
+    assert planned_action_count > 1
     assert action_results == [
         {
             "action_id": "step_budget",
@@ -499,7 +501,9 @@ def test_run_offline_blocks_case_when_plan_exceeds_max_steps(tmp_path, monkeypat
             "after_screenshot": "",
             "element_summary_before": "",
             "element_summary_after": "",
-            "notes": ["Execution plan has 4 actions, exceeding max_steps_per_case=1."],
+            "notes": [
+                f"Execution plan has {planned_action_count} actions, exceeding max_steps_per_case=1."
+            ],
             "execution_rationale_id": "",
         }
     ]
