@@ -10,9 +10,11 @@ import base64
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -28,6 +30,15 @@ _USAGE_FIELDS = (
 )
 
 
+class LLMProviderError(RuntimeError):
+    """携带可重试属性的 Provider 通信错误。"""
+
+    def __init__(self, message: str, *, retryable: bool, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
+
+
 class LLMClient:
     """封装 JSON 输出、schema 校验、重试和 prompt 脱敏。"""
 
@@ -36,6 +47,7 @@ class LLMClient:
         provider: Provider | None = None,
         config: dict[str, Any] | None = None,
         evidence_config: dict[str, Any] | None = None,
+        telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.provider = provider
         self.config = {
@@ -48,6 +60,7 @@ class LLMClient:
             "model": "configured-by-env",
             "temperature": 0.1,
             "max_retries": 2,
+            "retry_backoff_seconds": 0.25,
             "timeout_seconds": 60,
             "system_prompt": "你是移动 App 测试结果初判助手。只输出符合 schema 的 JSON。",
         } | (config or {})
@@ -56,6 +69,7 @@ class LLMClient:
             "sensitive_keywords": ["资金账号", "手机号", "资产", "持仓"],
             "redaction_placeholder": "[REDACTED]",
         } | (evidence_config or {})
+        self.telemetry_sink = telemetry_sink
         self.provider_error = ""
         if self.provider is None and self.config.get("enabled", False):
             self.provider = self._provider_from_config()
@@ -65,6 +79,7 @@ class LLMClient:
         prompt: str,
         schema: dict[str, Any],
         images: list[str] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """请求模型按给定 schema 返回 JSON 结构。
 
@@ -84,9 +99,12 @@ class LLMClient:
         max_attempts = max_retries + 1
         errors: list[dict[str, Any]] = []
         attempt_usage: list[dict[str, Any]] = []
+        attempts_made = 0
         redacted_prompt = _redact_sensitive_text(prompt, self.evidence_config)
+        call_context = context or {}
 
         for attempt in range(1, max_attempts + 1):
+            attempts_made = attempt
             resolved_images: list[str] = []
             if images:
                 resolved_images = [_resolve_image_url(img) for img in images]
@@ -101,8 +119,27 @@ class LLMClient:
             try:
                 raw_response = self.provider(payload)
             except Exception as exc:  # pragma: no cover - provider behavior is integration-specific
-                errors.append({"type": "provider_error", "message": str(exc), "attempt": attempt})
-                attempt_usage.append({"usage_available": False})
+                usage = {"usage_available": False}
+                attempt_usage.append(usage)
+                error = {"type": "provider_error", "message": str(exc), "attempt": attempt}
+                if isinstance(exc, LLMProviderError) and exc.status_code is not None:
+                    error["status_code"] = exc.status_code
+                errors.append(error)
+                telemetry_error = self._emit_telemetry(
+                    context=call_context,
+                    attempt=attempt,
+                    status="provider_error",
+                    usage=usage,
+                    provider_meta={"model": str(self.config.get("model", "")), "request_id": ""},
+                    error_type="provider_error",
+                    error_message=str(exc),
+                )
+                if telemetry_error is not None:
+                    errors.append(telemetry_error)
+                retryable = not isinstance(exc, LLMProviderError) or exc.retryable
+                if not retryable:
+                    break
+                self._sleep_before_retry(attempt, max_attempts)
                 continue
 
             response_content, usage, provider_meta = _provider_response_parts(raw_response)
@@ -110,13 +147,46 @@ class LLMClient:
             parsed, parse_error = _parse_json_response(response_content)
             if parse_error:
                 errors.append(parse_error | {"attempt": attempt})
+                telemetry_error = self._emit_telemetry(
+                    context=call_context,
+                    attempt=attempt,
+                    status="invalid_json",
+                    usage=usage,
+                    provider_meta=provider_meta,
+                    error_type=str(parse_error.get("type", "invalid_json")),
+                    error_message=str(parse_error.get("message", "")),
+                )
+                if telemetry_error is not None:
+                    errors.append(telemetry_error)
+                self._sleep_before_retry(attempt, max_attempts)
                 continue
 
             schema_errors = _validate_object_schema(parsed, schema)
             if schema_errors:
                 errors.append({"type": "schema_validation", "missing": schema_errors, "attempt": attempt})
+                telemetry_error = self._emit_telemetry(
+                    context=call_context,
+                    attempt=attempt,
+                    status="schema_validation",
+                    usage=usage,
+                    provider_meta=provider_meta,
+                    error_type="schema_validation",
+                    error_message=f"Missing required fields: {schema_errors}",
+                )
+                if telemetry_error is not None:
+                    errors.append(telemetry_error)
+                self._sleep_before_retry(attempt, max_attempts)
                 continue
 
+            telemetry_error = self._emit_telemetry(
+                context=call_context,
+                attempt=attempt,
+                status="success",
+                usage=usage,
+                provider_meta=provider_meta,
+            )
+            if telemetry_error is not None:
+                errors.append(telemetry_error)
             return {
                 "status": "success",
                 "attempts": attempt,
@@ -130,11 +200,50 @@ class LLMClient:
         return {
             "status": "uncertain",
             "reason": "LLM response did not match required JSON schema",
-            "attempts": max_attempts,
+            "attempts": attempts_made,
             "errors": errors,
             "usage": _aggregate_usage(attempt_usage),
             "attempt_usage": attempt_usage,
         }
+
+    def _sleep_before_retry(self, attempt: int, max_attempts: int) -> None:
+        if attempt >= max_attempts:
+            return
+        backoff = max(0.0, float(self.config.get("retry_backoff_seconds", 0.25) or 0.0))
+        if backoff:
+            time.sleep(backoff * attempt)
+
+    def _emit_telemetry(
+        self,
+        *,
+        context: dict[str, Any],
+        attempt: int,
+        status: str,
+        usage: dict[str, Any],
+        provider_meta: dict[str, str],
+        error_type: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any] | None:
+        if self.telemetry_sink is None:
+            return None
+        record = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "stage": str(context.get("stage", "")),
+            "case_id": str(context.get("case_id", "")),
+            "goal_id": str(context.get("goal_id", "")),
+            "attempt": attempt,
+            "status": status,
+            "model": provider_meta.get("model") or str(self.config.get("model", "")),
+            "request_id": provider_meta.get("request_id", ""),
+            **usage,
+            "error_type": error_type,
+            "error_message": _redact_sensitive_text(error_message, self.evidence_config)[:500],
+        }
+        try:
+            self.telemetry_sink(record)
+        except Exception as exc:  # pragma: no cover - sink behavior is integration-specific
+            return {"type": "telemetry_error", "message": str(exc), "attempt": attempt}
+        return None
 
     def _provider_from_config(self) -> Provider | None:
         provider_name = str(self.config.get("provider", "openai_compatible")).strip().lower()
@@ -289,9 +398,17 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
                 response_text = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"LLM HTTP {exc.code}: {detail}") from exc
+            retryable = exc.code == 429 or exc.code in {500, 502, 503, 504}
+            raise LLMProviderError(
+                f"LLM HTTP {exc.code}: {detail}",
+                retryable=retryable,
+                status_code=exc.code,
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
+            raise LLMProviderError(
+                f"LLM request failed: {exc.reason}",
+                retryable=True,
+            ) from exc
 
         response_json = json.loads(response_text)
         return {

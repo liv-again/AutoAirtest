@@ -93,6 +93,7 @@ def default_config() -> dict[str, Any]:
             "model": "configured-by-env",
             "temperature": 0.1,
             "max_retries": 2,
+            "retry_backoff_seconds": 0.25,
             "timeout_seconds": 60,
             "use_for_planning": False,
             "use_for_verification": True,

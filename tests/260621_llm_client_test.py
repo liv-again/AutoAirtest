@@ -1,4 +1,8 @@
+import io
 import json
+import urllib.error
+
+import pytest
 
 from autoairtest.tools import llm_client
 from autoairtest.tools.llm_client import LLMClient
@@ -184,6 +188,149 @@ def test_llm_client_ignores_invalid_usage_fields_without_losing_business_result(
     assert result["data"] == {"status": "pass"}
     assert "prompt_tokens" not in result["usage"]
     assert result["usage"]["cache_hit_ratio"] == 0.8
+
+
+def test_llm_client_emits_one_sanitized_telemetry_record_per_attempt(monkeypatch):
+    records = []
+    sleeps = []
+    responses = iter(
+        [
+            {
+                "content": "not json",
+                "usage": {
+                    "prompt_cache_hit_tokens": 10,
+                    "prompt_cache_miss_tokens": 5,
+                },
+                "model": "test-model",
+                "request_id": "req-1",
+            },
+            {
+                "content": '{"status":"pass"}',
+                "usage": {
+                    "prompt_cache_hit_tokens": 15,
+                    "prompt_cache_miss_tokens": 0,
+                },
+                "model": "test-model",
+                "request_id": "req-2",
+            },
+        ]
+    )
+    client = LLMClient(
+        provider=lambda payload: next(responses),
+        config={"max_retries": 1, "retry_backoff_seconds": 0.25},
+        telemetry_sink=records.append,
+    )
+    monkeypatch.setattr(llm_client.time, "sleep", sleeps.append)
+
+    result = client.json_call(
+        "手机号 13800138000",
+        {"type": "object", "required": ["status"]},
+        context={"stage": "planning", "case_id": "TC_1"},
+    )
+
+    assert result["status"] == "success"
+    assert [record["attempt"] for record in records] == [1, 2]
+    assert [record["status"] for record in records] == ["invalid_json", "success"]
+    assert sleeps == [0.25]
+    serialized = json.dumps(records, ensure_ascii=False)
+    for record in records:
+        for forbidden_key in (
+            "Authorization",
+            "api_key",
+            "prompt",
+            "messages",
+            "content",
+            "images",
+        ):
+            assert forbidden_key not in record
+    for forbidden_value in (
+        "手机号",
+        "13800138000",
+        "not json",
+    ):
+        assert forbidden_value not in serialized
+
+
+def _http_error(status_code):
+    return urllib.error.HTTPError(
+        url="https://example.test/chat/completions",
+        code=status_code,
+        msg="error",
+        hdrs=None,
+        fp=io.BytesIO(b"client error"),
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404])
+def test_llm_client_does_not_retry_non_retryable_http_errors(monkeypatch, status_code):
+    calls = []
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        raise _http_error(status_code)
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+    client = LLMClient(
+        config={
+            "enabled": True,
+            "base_url": "https://example.test",
+            "api_key": "test-key",
+            "max_retries": 2,
+            "retry_backoff_seconds": 0,
+        }
+    )
+
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["status"] == "uncertain"
+    assert result["attempts"] == 1
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 502, 503, 504])
+def test_llm_client_retries_retryable_http_errors(monkeypatch, status_code):
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [{"message": {"content": '{"status":"pass"}'}}],
+                    "usage": {
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 0,
+                    },
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=0):
+        calls.append(request)
+        if len(calls) == 1:
+            raise _http_error(status_code)
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+    client = LLMClient(
+        config={
+            "enabled": True,
+            "base_url": "https://example.test",
+            "api_key": "test-key",
+            "max_retries": 1,
+            "retry_backoff_seconds": 0,
+        }
+    )
+
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["status"] == "success"
+    assert result["attempts"] == 2
+    assert len(calls) == 2
 
 
 def test_llm_client_reports_unavailable_when_enabled_without_api_key(monkeypatch):

@@ -23,6 +23,7 @@ def test_default_config_exposes_latest_design_session_logs_doctor_and_state_grap
     assert config["llm"]["api_key_env"] == "OPENAI_API_KEY"
     assert config["llm"]["use_for_planning"] is False
     assert config["llm"]["use_for_verification"] is True
+    assert config["llm"]["retry_backoff_seconds"] == 0.25
 
 
 def test_merge_config_preserves_nested_latest_design_defaults():
