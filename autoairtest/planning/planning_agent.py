@@ -19,6 +19,9 @@ from autoairtest.models import (
 from autoairtest.planning.rule_based_planner import RuleBasedPlanner
 from autoairtest.planning.skill_registry import NavigationNode, SkillRegistry
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_PLANNER_PROMPT = _PROJECT_ROOT / "prompts" / "planner.md"
+
 
 class PlanningAgent:
     """优先使用可注入 LLM 规划，失败时回退到规则型 planner。"""
@@ -33,7 +36,7 @@ class PlanningAgent:
         self.llm_client = llm_client
         self.rule_based_planner = rule_based_planner or RuleBasedPlanner(skill_registry=skill_registry)
         self.skill_registry = skill_registry
-        self.prompt_path = Path(prompt_path) if prompt_path else Path("prompts/planner.md")
+        self.prompt_path = Path(prompt_path) if prompt_path else _DEFAULT_PLANNER_PROMPT
 
     def plan(self, case: NaturalLanguageTestCase) -> ExecutionPlan:
         if self.llm_client is not None and hasattr(self.llm_client, "json_call"):
@@ -44,8 +47,15 @@ class PlanningAgent:
 
     def _plan_with_llm(self, case: NaturalLanguageTestCase) -> ExecutionPlan | None:
         navigation_path = self._navigation_path_for(case)
-        prompt = self._planner_prompt(case, navigation_path)
-        result = self.llm_client.json_call(prompt, self._schema())
+        try:
+            prompt = self._planner_prompt(case, navigation_path)
+        except OSError:
+            return None
+        result = self.llm_client.json_call(
+            prompt,
+            self._schema(),
+            context={"stage": "planning", "case_id": case.internal_id},
+        )
         if not isinstance(result, dict) or result.get("status") != "success":
             return None
         data = result.get("data")
@@ -58,17 +68,16 @@ class PlanningAgent:
             return None
 
     def _planner_prompt(self, case: NaturalLanguageTestCase, navigation_path: list[NavigationNode] | None = None) -> str:
-        base_prompt = ""
-        if self.prompt_path.exists():
-            base_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
+        base_prompt = self._base_prompt()
         stock_detail_section = self._stock_detail_prompt_section(case)
         expected_result_section = self._expected_result_rules_section()
         nav_constraint = self._nav_context_section(navigation_path or [])
         return (
             f"{base_prompt}\n\n"
+            f"{expected_result_section}\n\n"
+            f"{self._navigation_rules_section()}\n\n"
             f"{nav_constraint}\n\n"
             f"{stock_detail_section}\n\n"
-            f"{expected_result_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -78,29 +87,31 @@ class PlanningAgent:
             f"parameters: {case.parameters}"
         ).strip()
 
+    def _base_prompt(self) -> str:
+        if not self.prompt_path.is_file():
+            raise FileNotFoundError(f"Planner prompt not found: {self.prompt_path}")
+        return self.prompt_path.read_text(encoding="utf-8").strip()
+
+    def _navigation_rules_section(self) -> str:
+        return (
+            "Navigation actions are resolved by the system via skills/navigation/nodes.yaml.\n"
+            "Rules:\n"
+            "1. Do not generate intent='navigate'.\n"
+            "2. Allowed intents: observe, tap, swipe, text, keyevent.\n"
+            "3. Before leaving a key page, observe it, then tap, then observe the new page.\n"
+            "4. If the case only verifies the current page, observe without leaving it.\n"
+            "5. Tap targets must be visible, real UI text."
+        )
+
     def _nav_context_section(self, navigation_path: list[NavigationNode]) -> str:
         """构建导航上下文提示，告知 LLM 当前页面和执行规则。"""
         if not navigation_path:
-            return (
-                "Navigation actions (intent='navigate') are resolved by the system via skills/navigation/nodes.yaml. "
-                "You MUST NOT generate any actions with intent='navigate'. "
-                "Allowed intent values: observe, tap, swipe, text, keyevent. Do NOT use any other value. "
-                "Only generate observe, tap, swipe, text, keyevent actions."
-            )
+            return "Navigation context: no deterministic path matched."
         path_text = " -> ".join(node.text for node in navigation_path)
-        final_page = navigation_path[-1].text if navigation_path else ""
         return (
-            f"系统已完成导航，当前位于页面: 「{final_page}」\n"
-            f"导航路径: {path_text}\n\n"
-            "规则:\n"
-            "1. 你绝对不能生成 intent='navigate' 的动作，导航已由系统完成。\n"
-            f"2. 当前已在「{final_page}」页面，不要重复点击已导航到的目标。\n"
-            "3. 离开关键页面前（tap 跳转到其他页面），必须先在当前页面做一个 observe 采集数据。\n"
-            "   模式: observe(当前页数据) → tap(跳转) → observe(新页数据)\n"
-            "4. 如果用例只验证当前页内容，只需 observe，不要 tap 跳走。\n"
-            "5. tap 的目标必须是页面上真实存在的可点击文本，不要编造不存在的内容。\n"
-            "6. intent 必须使用以下值之一: observe, tap, swipe, text, keyevent。不能使用其他任何词。\n"
-            "   示例: {{\"intent\": \"observe\", ...}} 正确；{{\"intent\": \"采集数据\", ...}} 错误。\n"
+            "Navigation skill matched path.\n"
+            f"current_page: {navigation_path[-1].text}\n"
+            f"path: {path_text}"
         )
 
     def _stock_detail_prompt_section(self, case: NaturalLanguageTestCase) -> str:

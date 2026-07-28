@@ -1,9 +1,32 @@
 from dataclasses import replace
+from pathlib import Path
 
+from autoairtest.excel_loader import load_test_cases
 from autoairtest.models import NaturalLanguageTestCase
 from autoairtest.planning.planning_agent import PlanningAgent
 from autoairtest.planning.rule_based_planner import RuleBasedPlanner
 from autoairtest.planning.skill_registry import SkillRegistry
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class CapturingLLMClient:
+    def __init__(self):
+        self.calls = []
+
+    def json_call(self, prompt, schema, **kwargs):
+        self.calls.append({"prompt": prompt, "schema": schema, **kwargs})
+        return {"status": "unavailable"}
+
+
+def _common_prefix(values):
+    prefix = values[0]
+    for value in values[1:]:
+        index = 0
+        while index < min(len(prefix), len(value)) and prefix[index] == value[index]:
+            index += 1
+        prefix = prefix[:index]
+    return prefix
 
 
 def _case():
@@ -31,6 +54,45 @@ def test_planning_agent_uses_rule_based_fallback_without_llm():
     assert plan.case_id == "TC_1"
     assert plan.actions
     assert plan.verification_goals
+
+
+def test_planner_places_all_stable_rules_before_case_specific_context():
+    cases = load_test_cases(PROJECT_ROOT / "test-cases.xlsx", "需求测试报告")
+    agent = PlanningAgent(skill_registry=SkillRegistry(PROJECT_ROOT / "skills"))
+
+    prompts = [
+        agent._planner_prompt(case, agent._navigation_path_for(case))
+        for case in cases
+    ]
+    expected_rules = agent._expected_result_rules_section()
+    common_prefix = _common_prefix(prompts)
+
+    assert expected_rules in common_prefix
+    assert common_prefix.index(expected_rules) > common_prefix.index("# Planner Prompt")
+    assert all(
+        prompt.index(expected_rules) < prompt.index(f"case_id: {case.internal_id}")
+        for prompt, case in zip(prompts, cases)
+    )
+
+
+def test_planner_default_prompt_path_does_not_depend_on_current_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    agent = PlanningAgent(skill_registry=SkillRegistry(PROJECT_ROOT / "skills"))
+
+    prompt = agent._planner_prompt(_case(), [])
+
+    assert prompt.startswith("# Planner Prompt")
+
+
+def test_planner_passes_non_sensitive_call_context():
+    llm = CapturingLLMClient()
+
+    PlanningAgent(
+        llm_client=llm,
+        skill_registry=SkillRegistry(PROJECT_ROOT / "skills"),
+    ).plan(_case())
+
+    assert llm.calls[0]["context"] == {"stage": "planning", "case_id": "TC_1"}
 
 
 def test_planning_agent_constrains_llm_plan_with_navigation_skill(tmp_path):
@@ -64,7 +126,7 @@ nodes:
         def __init__(self):
             self.prompt = ""
 
-        def json_call(self, prompt, schema):
+        def json_call(self, prompt, schema, **kwargs):
             self.prompt = prompt
             return {
                 "status": "success",
@@ -191,7 +253,7 @@ def test_planning_agent_injects_stock_detail_usage_and_enriches_llm_action(tmp_p
         def __init__(self):
             self.prompt = ""
 
-        def json_call(self, prompt, schema):
+        def json_call(self, prompt, schema, **kwargs):
             self.prompt = prompt
             return {
                 "status": "success",
@@ -303,7 +365,7 @@ def test_llm_planner_does_not_apply_page_local_locator_to_navigation_action(tmp_
     _write_navigation_search_skill(tmp_path)
 
     class FakeLLMClient:
-        def json_call(self, prompt, schema):
+        def json_call(self, prompt, schema, **kwargs):
             return {
                 "status": "success",
                 "data": {
