@@ -25,8 +25,8 @@ def test_order_gap_requires_manual_review_with_structured_details():
     assert judgment.structured_details == {
         "expected": ["A", "B", "C", "D"],
         "observed": ["A", "B", "C"],
+        "filtered_for_order": ["A", "B", "C"],
         "missing": ["D"],
-        "unexpected": [],
         "evidence_source": "poco_tree",
     }
     assert "elements.json" in judgment.evidence_files
@@ -48,7 +48,9 @@ def test_order_unexpected_entity_requires_manual_review_with_structured_details(
     assert judgment.preliminary_status == PreliminaryStatus.MANUAL_REQUIRED
     assert judgment.manual_review_reason == "verification_evidence_gap"
     assert judgment.structured_details["missing"] == ["D"]
-    assert judgment.structured_details["unexpected"] == ["E"]
+    assert judgment.structured_details["observed"] == ["A", "B", "C", "E"]
+    assert judgment.structured_details["filtered_for_order"] == ["A", "B", "C"]
+    assert "unexpected" not in judgment.structured_details
 
 
 def test_data_correctness_uses_structured_manual_review_reason():
