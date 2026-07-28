@@ -85,6 +85,8 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
         def read(self):
             return json.dumps(
                 {
+                    "id": "req-cache-1",
+                    "model": "test-model-resolved",
                     "choices": [
                         {
                             "message": {
@@ -97,7 +99,14 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
                                 )
                             }
                         }
-                    ]
+                    ],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "prompt_cache_hit_tokens": 80,
+                        "prompt_cache_miss_tokens": 20,
+                        "completion_tokens": 10,
+                        "total_tokens": 110,
+                    },
                 },
                 ensure_ascii=False,
             ).encode("utf-8")
@@ -132,6 +141,49 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
     assert captured["body"]["model"] == "test-model"
     assert captured["body"]["response_format"] == {"type": "json_object"}
     assert result["data"]["manual_review_reason"] == "data_correctness"
+    assert result["provider"] == {
+        "model": "test-model-resolved",
+        "request_id": "req-cache-1",
+    }
+    assert result["usage"] == {
+        "usage_available": True,
+        "prompt_tokens": 100,
+        "prompt_cache_hit_tokens": 80,
+        "prompt_cache_miss_tokens": 20,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "cache_hit_ratio": 0.8,
+    }
+    assert result["attempt_usage"][0]["prompt_cache_hit_tokens"] == 80
+
+
+def test_llm_client_accepts_legacy_provider_without_usage():
+    client = LLMClient(provider=lambda payload: {"status": "pass"})
+
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["status"] == "success"
+    assert result["usage"] == {"usage_available": False}
+    assert result["attempt_usage"] == [{"usage_available": False}]
+
+
+def test_llm_client_ignores_invalid_usage_fields_without_losing_business_result():
+    client = LLMClient(
+        provider=lambda payload: {
+            "content": '{"status":"pass"}',
+            "usage": {
+                "prompt_tokens": "bad",
+                "prompt_cache_hit_tokens": 4,
+                "prompt_cache_miss_tokens": 1,
+            },
+        }
+    )
+
+    result = client.json_call("prompt", {"type": "object", "required": ["status"]})
+
+    assert result["data"] == {"status": "pass"}
+    assert "prompt_tokens" not in result["usage"]
+    assert result["usage"]["cache_hit_ratio"] == 0.8
 
 
 def test_llm_client_reports_unavailable_when_enabled_without_api_key(monkeypatch):

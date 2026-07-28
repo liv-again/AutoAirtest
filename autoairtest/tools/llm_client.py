@@ -19,6 +19,14 @@ from urllib.parse import urljoin
 
 Provider = Callable[[dict[str, Any]], str | dict[str, Any]]
 
+_USAGE_FIELDS = (
+    "prompt_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+    "completion_tokens",
+    "total_tokens",
+)
+
 
 class LLMClient:
     """封装 JSON 输出、schema 校验、重试和 prompt 脱敏。"""
@@ -75,6 +83,7 @@ class LLMClient:
         max_retries = max(0, int(self.config.get("max_retries", 0) or 0))
         max_attempts = max_retries + 1
         errors: list[dict[str, Any]] = []
+        attempt_usage: list[dict[str, Any]] = []
         redacted_prompt = _redact_sensitive_text(prompt, self.evidence_config)
 
         for attempt in range(1, max_attempts + 1):
@@ -93,9 +102,12 @@ class LLMClient:
                 raw_response = self.provider(payload)
             except Exception as exc:  # pragma: no cover - provider behavior is integration-specific
                 errors.append({"type": "provider_error", "message": str(exc), "attempt": attempt})
+                attempt_usage.append({"usage_available": False})
                 continue
 
-            parsed, parse_error = _parse_json_response(raw_response)
+            response_content, usage, provider_meta = _provider_response_parts(raw_response)
+            attempt_usage.append(usage)
+            parsed, parse_error = _parse_json_response(response_content)
             if parse_error:
                 errors.append(parse_error | {"attempt": attempt})
                 continue
@@ -105,13 +117,23 @@ class LLMClient:
                 errors.append({"type": "schema_validation", "missing": schema_errors, "attempt": attempt})
                 continue
 
-            return {"status": "success", "attempts": attempt, "data": parsed, "errors": errors}
+            return {
+                "status": "success",
+                "attempts": attempt,
+                "data": parsed,
+                "errors": errors,
+                "provider": provider_meta,
+                "usage": _aggregate_usage(attempt_usage),
+                "attempt_usage": attempt_usage,
+            }
 
         return {
             "status": "uncertain",
             "reason": "LLM response did not match required JSON schema",
             "attempts": max_attempts,
             "errors": errors,
+            "usage": _aggregate_usage(attempt_usage),
+            "attempt_usage": attempt_usage,
         }
 
     def _provider_from_config(self) -> Provider | None:
@@ -141,6 +163,56 @@ def _parse_json_response(raw_response: str | dict[str, Any]) -> tuple[dict[str, 
     if not isinstance(parsed, dict):
         return {}, {"type": "invalid_json", "message": "JSON response must be an object"}
     return parsed, None
+
+
+def _provider_response_parts(
+    raw_response: str | dict[str, Any],
+) -> tuple[str | dict[str, Any], dict[str, Any], dict[str, str]]:
+    if isinstance(raw_response, dict) and "content" in raw_response:
+        return (
+            raw_response.get("content", ""),
+            _normalize_usage(raw_response.get("usage")),
+            {
+                "model": str(raw_response.get("model", "")),
+                "request_id": str(raw_response.get("request_id", "")),
+            },
+        )
+    return raw_response, _normalize_usage(None), {"model": "", "request_id": ""}
+
+
+def _normalize_usage(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"usage_available": False}
+    normalized: dict[str, Any] = {"usage_available": True}
+    for field in _USAGE_FIELDS:
+        raw = value.get(field)
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 0:
+            normalized[field] = parsed
+    hit = normalized.get("prompt_cache_hit_tokens")
+    miss = normalized.get("prompt_cache_miss_tokens")
+    if isinstance(hit, int) and isinstance(miss, int) and hit + miss > 0:
+        normalized["cache_hit_ratio"] = hit / (hit + miss)
+    return normalized
+
+
+def _aggregate_usage(attempt_usage: list[dict[str, Any]]) -> dict[str, Any]:
+    available = [item for item in attempt_usage if item.get("usage_available", False)]
+    if not available:
+        return {"usage_available": False}
+    aggregated: dict[str, Any] = {"usage_available": True}
+    for field in _USAGE_FIELDS:
+        values = [item[field] for item in available if isinstance(item.get(field), int)]
+        if values:
+            aggregated[field] = sum(values)
+    hit = aggregated.get("prompt_cache_hit_tokens")
+    miss = aggregated.get("prompt_cache_miss_tokens")
+    if isinstance(hit, int) and isinstance(miss, int) and hit + miss > 0:
+        aggregated["cache_hit_ratio"] = hit / (hit + miss)
+    return aggregated
 
 
 def _validate_object_schema(data: dict[str, Any], schema: dict[str, Any]) -> list[str]:
@@ -222,7 +294,12 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
             raise RuntimeError(f"LLM request failed: {exc.reason}") from exc
 
         response_json = json.loads(response_text)
-        return _extract_openai_compatible_content(response_json)
+        return {
+            "content": _extract_openai_compatible_content(response_json),
+            "usage": response_json.get("usage"),
+            "model": str(response_json.get("model", "")),
+            "request_id": str(response_json.get("id", "")),
+        }
 
     return provider
 
