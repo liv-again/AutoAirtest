@@ -1,6 +1,7 @@
 import json
 
 from autoairtest import orchestrator
+from autoairtest.execution.device_workflow import DeviceWorkflow
 from autoairtest.models import NaturalLanguageTestCase
 
 
@@ -25,10 +26,19 @@ class FakePocoAdapter:
     reason = ""
 
     def dump(self):
-        return {"status": "success", "visible_texts": ["行情", "股指", "国内指数"], "raw": {}}
+        return {
+            "status": "success",
+            "visible_texts": ["首页", "行情", "交易", "股指", "国内指数"],
+            "raw": {},
+        }
 
     def click(self, text):
         return {"status": "success", "query": text}
+
+
+class FakeOCRAdapter:
+    def recognize(self, screenshot_path):
+        return {"status": "success", "items": [], "screenshot": screenshot_path}
 
 
 def test_run_offline_device_mode_calls_adapters_and_writes_evidence(tmp_path, monkeypatch):
@@ -49,15 +59,34 @@ def test_run_offline_device_mode_calls_adapters_and_writes_evidence(tmp_path, mo
         original_fields={},
     )
     monkeypatch.setattr(orchestrator, "_load_cases_or_dependency_case", lambda config: [case])
-    monkeypatch.setattr(orchestrator, "AirtestAdapter", FakeAirtestAdapter)
-    monkeypatch.setattr(orchestrator, "PocoAdapter", FakePocoAdapter)
+    fake_airtest = FakeAirtestAdapter(adb_serial="serial-1")
+    fake_poco = FakePocoAdapter()
+
+    def fake_device_workflow(*args, **kwargs):
+        return DeviceWorkflow(
+            airtest=fake_airtest,
+            poco=fake_poco,
+            ocr=FakeOCRAdapter(),
+            correction_budget=kwargs.get("correction_budget"),
+            retry_config={
+                **kwargs.get("retry_config", {}),
+                "default_interval_seconds": 0,
+                "poco_dump_interval_seconds": 0,
+            },
+            app_config=kwargs.get("app_config"),
+            evidence_config=kwargs.get("evidence_config"),
+        )
+
+    monkeypatch.setattr(orchestrator, "DeviceWorkflow", fake_device_workflow)
 
     run_dir = orchestrator.run_offline(
         {
             "execution": {"mode": "device"},
             "app": {"package": "com.example.app", "activity": ""},
             "device": {"adb_serial": "serial-1"},
+            "verification": {"evidence_recollection": {"max_attempts": 0}},
             "report": {"output_dir": str(tmp_path), "generate_html": False},
+            "logs": {"enable_capture": False},
             "input": {"case_filter": ""},
         }
     )
@@ -65,6 +94,6 @@ def test_run_offline_device_mode_calls_adapters_and_writes_evidence(tmp_path, mo
     action_results_path = run_dir / "cases" / "TC_device" / "action_results.json"
     action_results = json.loads(action_results_path.read_text(encoding="utf-8"))
     assert action_results[0]["status"] == "success"
-    assert action_results[0]["target_element"] == {"text": "行情"}
-    assert (run_dir / "cases" / "TC_device" / "screenshots" / "a1_before.png").exists()
-    assert (run_dir / "cases" / "TC_device" / "element_summaries" / "a1_after.json").exists()
+    assert action_results[0]["target_element"]["target"] == "行情"
+    assert (run_dir / "cases" / "TC_device" / "screenshots" / "001_before_a1.png").exists()
+    assert (run_dir / "cases" / "TC_device" / "element_summaries" / "001_after_a1.json").exists()

@@ -254,6 +254,9 @@ git commit -m "test: assert planner outputs by stable contracts"
 def __init__(self):
     self.poco = object()
     self.airtest = object()
+
+def navigate_to_home(self):
+    return {"home_detected": True, "back_presses": 0, "last_page_texts": []}
 ```
 
 对于仅验证工作流构造参数和状态图的测试，在 `execution` 配置中加入：
@@ -350,7 +353,7 @@ monkeypatch.setattr(orchestrator, "DeviceWorkflow", fake_device_workflow)
 
 ```python
 assert action_results[0]["status"] == "success"
-assert action_results[0]["target_element"]["text"] == "行情"
+assert action_results[0]["target_element"]["target"] == "行情"
 assert (run_dir / "cases" / "TC_device" / "screenshots" / "001_before_a1.png").exists()
 assert (run_dir / "cases" / "TC_device" / "element_summaries" / "001_after_a1.json").exists()
 ```

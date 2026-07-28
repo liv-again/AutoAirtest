@@ -264,10 +264,17 @@ def test_run_offline_uses_device_workflow_when_execution_mode_is_device(tmp_path
     monkeypatch.setattr(orchestrator, "_load_cases_or_dependency_case", lambda config: [case])
 
     class FakeDeviceWorkflow:
+        def __init__(self):
+            self.poco = object()
+            self.airtest = object()
+
         def execute_plan(self, plan, case_dir):
             marker = case_dir / "device-workflow-called.txt"
             marker.write_text(plan.case_id, encoding="utf-8")
             return []
+
+        def navigate_to_home(self):
+            return {"home_detected": True, "back_presses": 0, "last_page_texts": []}
 
     workflow_kwargs = {}
 
@@ -279,12 +286,13 @@ def test_run_offline_uses_device_workflow_when_execution_mode_is_device(tmp_path
 
     run_dir = orchestrator.run_offline(
         {
-            "execution": {"mode": "device", "retry": {"poco_dump_max_attempts": 5}},
-            "app": {"package": "com.example.securities", "activity": ".MainActivity"},
-            "evidence": {"redact_sensitive_text": False, "sensitive_keywords": ["手机号"]},
-            "report": {"output_dir": str(tmp_path), "generate_html": False},
-            "logs": {"enable_capture": False},
-            "input": {"case_filter": ""},
+                "execution": {"mode": "device", "retry": {"poco_dump_max_attempts": 5}},
+                "app": {"package": "com.example.securities", "activity": ".MainActivity"},
+                "evidence": {"redact_sensitive_text": False, "sensitive_keywords": ["手机号"]},
+                "verification": {"evidence_recollection": {"max_attempts": 0}},
+                "report": {"output_dir": str(tmp_path), "generate_html": False},
+                "logs": {"enable_capture": False},
+                "input": {"case_filter": ""},
         }
     )
 
@@ -331,9 +339,18 @@ def test_run_offline_recollects_evidence_for_verification_gap(tmp_path, monkeypa
         ],
     )
 
+    recollector_kwargs = {}
+
     class FakeEvidenceRecollector:
-        def __init__(self, max_attempts=2):
+        def __init__(self, max_attempts=2, poco=None, airtest=None):
             self.max_attempts = max_attempts
+            recollector_kwargs.update(
+                {
+                    "max_attempts": max_attempts,
+                    "poco": poco,
+                    "airtest": airtest,
+                }
+            )
 
         def recollect(self, goal_id, case_dir, attempt):
             return {
@@ -373,6 +390,11 @@ def test_run_offline_recollects_evidence_for_verification_gap(tmp_path, monkeypa
         "attempt": 1,
         "trigger": "verification_evidence_gap",
     }
+    assert recollector_kwargs == {
+        "max_attempts": 2,
+        "poco": None,
+        "airtest": None,
+    }
 
 
 def test_run_offline_updates_state_graph_when_enabled(tmp_path, monkeypatch):
@@ -395,6 +417,10 @@ def test_run_offline_updates_state_graph_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(orchestrator, "_load_cases_or_dependency_case", lambda config: [case])
 
     class FakeDeviceWorkflow:
+        def __init__(self):
+            self.poco = object()
+            self.airtest = object()
+
         def execute_plan(self, plan, case_dir):
             before_summary = case_dir / "element_summaries" / "001_before_a1.json"
             after_summary = case_dir / "element_summaries" / "001_after_a1.json"
@@ -435,13 +461,17 @@ def test_run_offline_updates_state_graph_when_enabled(tmp_path, monkeypatch):
                 )
             ]
 
+        def navigate_to_home(self):
+            return {"home_detected": True, "back_presses": 0, "last_page_texts": []}
+
     monkeypatch.setattr(orchestrator, "DeviceWorkflow", lambda *args, **kwargs: FakeDeviceWorkflow())
 
     run_dir = orchestrator.run_offline(
-        {
-            "execution": {"mode": "device", "enable_state_graph": True},
-            "report": {"output_dir": str(tmp_path), "generate_html": False},
-            "logs": {"enable_capture": False},
+            {
+                "execution": {"mode": "device", "enable_state_graph": True},
+                "verification": {"evidence_recollection": {"max_attempts": 0}},
+                "report": {"output_dir": str(tmp_path), "generate_html": False},
+                "logs": {"enable_capture": False},
             "input": {"case_filter": ""},
         }
     )
