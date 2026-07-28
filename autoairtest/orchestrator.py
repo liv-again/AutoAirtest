@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -59,9 +60,16 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
     session_suffix = safe_path_name(str(config["report"].get("session_name", "")))
     session_id = f"{timestamp}_{session_suffix}" if session_suffix else timestamp
     store = EvidenceStore(config["report"]["output_dir"], session_id)
+    store.initialize_jsonl("llm_usage.jsonl")
+
+    def llm_telemetry_sink(record: dict[str, Any]) -> None:
+        store.append_jsonl("llm_usage.jsonl", record)
+
     skill_registry = SkillRegistry(config.get("skills", {}).get("root", "skills"))
+    planning_llm_client = _planning_llm_client(config, telemetry_sink=llm_telemetry_sink)
+    verification_llm_client = _verification_llm_client(config, telemetry_sink=llm_telemetry_sink)
     planner = PlanningAgent(
-        llm_client=_planning_llm_client(config),
+        llm_client=planning_llm_client,
         rule_based_planner=_build_rule_based_planner(skill_registry),
         skill_registry=skill_registry,
     )
@@ -191,6 +199,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             _update_state_graph_from_actions(state_graph, case.internal_id, case_dir, action_results)
         _write_case_log(case_dir, case, action_results, plan, config)
         verification_evidence = {
+            "case_id": case.internal_id,
             "visible_texts": _collect_visible_texts(case_dir),
             "evidence_files": [],
             "llm_preliminary_judgment": bool(
@@ -198,7 +207,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             ),
         }
         if verification_evidence["llm_preliminary_judgment"]:
-            verification_evidence["llm_client"] = _verification_llm_client(config)
+            verification_evidence["llm_client"] = verification_llm_client
         max_recollection_attempts = _max_evidence_recollection_attempts(config)
         recollector = (
             EvidenceRecollector(
@@ -352,19 +361,37 @@ def _load_cases_or_dependency_case(config: dict[str, Any]):
 
 
 # 根据配置决定规划阶段是否启用 LLM。
-def _planning_llm_client(config: dict[str, Any]) -> LLMClient | None:
+def _planning_llm_client(
+    config: dict[str, Any],
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> LLMClient | None:
     llm_config = config.get("llm", {})
     if not llm_config.get("enabled", False) or not llm_config.get("use_for_planning", False):
         return None
-    return LLMClient(config=llm_config, evidence_config=config.get("evidence", {}))
+    return LLMClient(
+        config=llm_config,
+        evidence_config=config.get("evidence", {}),
+        telemetry_sink=telemetry_sink,
+    )
 
 
 # 构造验证阶段使用的 LLM 客户端；未启用在线 provider 时客户端会返回 unavailable。
-def _verification_llm_client(config: dict[str, Any]) -> LLMClient:
+def _verification_llm_client(
+    config: dict[str, Any],
+    telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> LLMClient:
     llm_config = config.get("llm", {})
     if not llm_config.get("use_for_verification", True):
-        return LLMClient(config={"enabled": False}, evidence_config=config.get("evidence", {}))
-    return LLMClient(config=llm_config, evidence_config=config.get("evidence", {}))
+        return LLMClient(
+            config={"enabled": False},
+            evidence_config=config.get("evidence", {}),
+            telemetry_sink=telemetry_sink,
+        )
+    return LLMClient(
+        config=llm_config,
+        evidence_config=config.get("evidence", {}),
+        telemetry_sink=telemetry_sink,
+    )
 
 
 # 按配置把最终合并后的运行配置另存为 JSON，便于复现实验。

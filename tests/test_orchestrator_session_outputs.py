@@ -564,11 +564,12 @@ def test_run_offline_passes_llm_client_to_verifier_when_enabled(tmp_path, monkey
     )
 
     class FakeLLMClient:
-        def __init__(self, provider=None, config=None, evidence_config=None):
+        def __init__(self, provider=None, config=None, evidence_config=None, telemetry_sink=None):
             self.config = config
             self.evidence_config = evidence_config
+            self.telemetry_sink = telemetry_sink
 
-        def json_call(self, prompt, schema):
+        def json_call(self, prompt, schema, **kwargs):
             return {
                 "status": "success",
                 "data": {
@@ -597,3 +598,140 @@ def test_run_offline_passes_llm_client_to_verifier_when_enabled(tmp_path, monkey
     assert verification[0]["preliminary_status"] == "manual_required"
     assert verification[0]["structured_details"]["llm_status"] == "success"
     assert verification[0]["structured_details"]["llm_observation_summary"] == "已采集页面证据，行情数据仍需人工核对。"
+
+
+def test_run_offline_initializes_empty_llm_usage_jsonl_when_llm_is_disabled(tmp_path, monkeypatch):
+    case = NaturalLanguageTestCase(
+        case_id="TC_llm_disabled",
+        internal_id="TC_llm_disabled",
+        row_number=2,
+        business_module="股指",
+        feature_module="国内指数",
+        feature_item="",
+        test_purpose="缓存指标产物",
+        priority="high",
+        step_name="",
+        precondition="",
+        operation_description="行情-股指：查看国内指数",
+        parameters="",
+        expected_result="数据展示正确",
+        original_fields={},
+    )
+    monkeypatch.setattr(orchestrator, "_load_cases_or_dependency_case", lambda config: [case])
+
+    run_dir = orchestrator.run_offline(
+        {
+            "llm": {"enabled": False},
+            "report": {"output_dir": str(tmp_path), "generate_html": False},
+            "logs": {"enable_capture": False},
+        }
+    )
+
+    usage_path = run_dir / "llm_usage.jsonl"
+    assert usage_path.exists()
+    assert usage_path.read_text(encoding="utf-8") == ""
+
+
+def test_run_offline_persists_shared_planning_and_verification_llm_usage(tmp_path, monkeypatch):
+    case = NaturalLanguageTestCase(
+        case_id="TC_llm_usage",
+        internal_id="TC_llm_usage",
+        row_number=2,
+        business_module="股指",
+        feature_module="国内指数",
+        feature_item="",
+        test_purpose="缓存指标审计",
+        priority="high",
+        step_name="",
+        precondition="",
+        operation_description="行情-股指：查看国内指数",
+        parameters="",
+        expected_result="数据展示正确",
+        original_fields={},
+    )
+
+    class FakeLLMClient:
+        def __init__(self, provider=None, config=None, evidence_config=None, telemetry_sink=None):
+            self.telemetry_sink = telemetry_sink
+
+        def json_call(self, prompt, schema, context=None, **kwargs):
+            context = context or {}
+            self.telemetry_sink(
+                {
+                    "timestamp": "2026-07-29T12:00:00+08:00",
+                    "stage": context.get("stage", ""),
+                    "case_id": context.get("case_id", ""),
+                    "goal_id": context.get("goal_id", ""),
+                    "attempt": 1,
+                    "status": "success",
+                    "model": "fake-model",
+                    "request_id": f"req-{context.get('stage', '')}",
+                    "usage_available": True,
+                    "prompt_tokens": 10,
+                    "prompt_cache_hit_tokens": 8,
+                    "prompt_cache_miss_tokens": 2,
+                    "completion_tokens": 2,
+                    "total_tokens": 12,
+                    "cache_hit_ratio": 0.8,
+                    "error_type": "",
+                    "error_message": "",
+                }
+            )
+            if "actions" in schema.get("required", []):
+                return {
+                    "status": "success",
+                    "data": {
+                        "case_id": context["case_id"],
+                        "understanding": "测试规划",
+                        "preconditions": [],
+                        "actions": [],
+                        "verification_goals": [
+                            {
+                                "goal_id": "v1",
+                                "claim": "页面数据可见",
+                                "category": "data_correctness",
+                                "expected_entities": ["国内指数"],
+                                "evidence_priority": ["poco_tree", "ocr_text", "screenshot"],
+                                "human_review_required": True,
+                                "review_reason": "data_correctness",
+                            }
+                        ],
+                        "manual_review_notes": [],
+                        "interpretation_rationales": [],
+                    },
+                    "attempts": 1,
+                    "errors": [],
+                }
+            return {
+                "status": "success",
+                "data": {
+                    "observation_summary": "已采集页面证据。",
+                    "manual_review_reason": "data_correctness",
+                },
+                "attempts": 1,
+                "errors": [],
+            }
+
+    monkeypatch.setattr(orchestrator, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(orchestrator, "_load_cases_or_dependency_case", lambda config: [case])
+
+    run_dir = orchestrator.run_offline(
+        {
+            "llm": {
+                "enabled": True,
+                "use_for_planning": True,
+                "use_for_verification": True,
+            },
+            "verification": {"llm_preliminary_judgment": True},
+            "report": {"output_dir": str(tmp_path), "generate_html": False},
+            "logs": {"enable_capture": False},
+        }
+    )
+
+    records = [
+        json.loads(line)
+        for line in (run_dir / "llm_usage.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert {record["stage"] for record in records} == {"planning", "verification"}
+    assert all(record["case_id"] == case.internal_id for record in records)
+    assert all("prompt" not in record and "content" not in record for record in records)
