@@ -311,7 +311,13 @@ class DeviceWorkflow:
             response = self.airtest.swipe(start, end) | {"source": "airtest_swipe"}
             return response, action.target, None, None
         if action.intent in {"text", "input"}:
-            response = self.airtest.text(action.target) | {"source": "airtest_text"}
+            input_text = _extract_text_from_description(action.description) or action.target
+            resource_id = _first_resource_id_locator(action.locators)
+            if resource_id:
+                response = self.poco.set_text_resource_id(resource_id, input_text) | {"source": "poco_set_text"}
+                if response.get("status") == "success":
+                    return response, action.target, None, None
+            response = self.airtest.text(input_text) | {"source": "airtest_text"}
             return response, action.target, None, None
         if action.intent in {"keyevent", "back"}:
             key = "BACK" if action.intent == "back" else action.target
@@ -777,6 +783,36 @@ def _candidate_elements(dump: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(visible_texts, list):
         return [{"text": str(item)} for item in visible_texts]
     return []
+
+
+def _first_resource_id_locator(locators: list[Any]) -> str:
+    """从 locators 列表中提取第一个 resource_id 的值，无匹配时返回空串。"""
+
+    for loc in locators:
+        if hasattr(loc, "type") and loc.type == "resource_id":
+            return str(loc.value) if loc.value else ""
+    return ""
+
+
+_GUIDE_PREFIXES = ("股票代码", "股票名称", "股票简拼", "代码", "名称", "简拼")
+
+
+def _extract_text_from_description(description: str) -> str:
+    """从动作描述中提取要输入的文本。
+
+    取 description 中最后一个"输入"之后的内容，并去掉引导性前缀。
+    如"在搜索输入框中输入股票代码600000"→"600000"。
+    """
+
+    text = str(description or "")
+    idx = text.rfind("输入")
+    if idx < 0:
+        return ""
+    raw = text[idx + 2:].strip()
+    for prefix in _GUIDE_PREFIXES:
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):].strip()
+    return raw
 
 
 def _navigation_alias(target: str, dump: dict[str, Any]) -> dict[str, Any] | None:

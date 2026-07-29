@@ -106,4 +106,77 @@ def load_test_cases(excel_path: str | Path, sheet_name: str) -> list[NaturalLang
 
     # 重名用例保留原始名称，同时用行号构造内部 ID，保证证据目录唯一。
     duplicates = {name for name, count in Counter(case_names).items() if name and count > 1}
-    return [build_case_from_row(row, row_number, duplicates) for row_number, row in rows]
+    individual_cases = [build_case_from_row(row, row_number, duplicates) for row_number, row in rows]
+    return group_consecutive_cases(individual_cases)
+
+
+def group_consecutive_cases(cases: list[NaturalLanguageTestCase]) -> list[NaturalLanguageTestCase]:
+    """将连续的同名用例合并为多步骤用例。
+
+    同名且连续的行被视为同一条用例的多个步骤，合并为一条
+    NaturalLanguageTestCase；单行或不同名的行保持不变。
+    """
+
+    if not cases:
+        return []
+
+    result: list[NaturalLanguageTestCase] = []
+    group: list[NaturalLanguageTestCase] = [cases[0]]
+
+    for case in cases[1:]:
+        if case.case_id == group[-1].case_id:
+            group.append(case)
+        else:
+            result.append(_merge_case_group(group))
+            group = [case]
+
+    result.append(_merge_case_group(group))
+    return result
+
+
+def _merge_case_group(group: list[NaturalLanguageTestCase]) -> NaturalLanguageTestCase:
+    """把同一用例的一组连续行合并为一条多步骤用例。"""
+
+    if len(group) == 1:
+        return group[0]
+
+    first = group[0]
+    ops: list[str] = []
+    exps: list[str] = []
+    step_names: list[str] = []
+
+    for i, case in enumerate(group, start=1):
+        if case.operation_description:
+            ops.append(f"步骤{i}: {case.operation_description}")
+        if case.expected_result:
+            exps.append(f"步骤{i}预期: {case.expected_result}")
+        if case.step_name:
+            step_names.append(f"步骤{i}: {case.step_name}")
+
+    merged_op = "\n".join(ops)
+    merged_exp = "\n".join(exps)
+    merged_step = "\n".join(step_names)
+
+    return NaturalLanguageTestCase(
+        case_id=first.case_id,
+        internal_id=first.case_id,
+        row_number=first.row_number,
+        business_module=first.business_module,
+        feature_module=first.feature_module,
+        feature_item=first.feature_item,
+        test_purpose=first.test_purpose,
+        priority=first.priority,
+        step_name=merged_step,
+        precondition=first.precondition,
+        operation_description=merged_op,
+        parameters=first.parameters,
+        expected_result=merged_exp,
+        original_fields={
+            **first.original_fields,
+            "操作描述": merged_op,
+            "预期结果": merged_exp,
+            "步骤名称": merged_step,
+            "_merged_rows": str(len(group)),
+            "_merged_row_numbers": ",".join(str(c.row_number) for c in group),
+        },
+    )

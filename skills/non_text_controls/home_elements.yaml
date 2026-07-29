@@ -1,0 +1,30 @@
+# 首页非文本控件定义
+# 使用稳定 element ID 和有序定位器，格式风格与 skills/stock_detail/fenshi_elements_1.yaml 保持一致。
+version: 1
+schema: non_text_controls
+source: ../../非文本类控件补充.md
+page_id: home
+page_name: 首页
+
+roots: []
+
+elements:
+  home_message_center:
+    text: 消息中心
+    parent: null
+    aliases: [消息, 通知中心, 消息通知]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/message_push_center
+    description: 首页标题栏右侧消息中心图标
+
+  home_search_input:
+    text: 搜索输入框
+    parent: null
+    aliases: [搜索框, 首页搜索]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/navi_search_layout
+    description: 首页标题栏正中央搜索输入框

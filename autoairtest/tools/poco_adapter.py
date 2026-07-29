@@ -127,6 +127,46 @@ class PocoAdapter:
             "target": _node_summary(nodes[0]),
         }
 
+    def set_text_resource_id(self, resource_id: str, text: str) -> dict[str, Any]:
+        """按 Android resource-id 定位控件并用 Poco set_text 输入文本。"""
+
+        normalized, reason = _normalize_resource_id(resource_id, self.app_package)
+        if reason:
+            return {"status": "unavailable", "reason": reason, "query": str(resource_id), "text": text}
+        poco = self._poco()
+        if poco is None:
+            return {"status": "unavailable", "reason": "poco is not installed in torch", "query": normalized, "text": text}
+        try:
+            selector = poco(normalized)
+            nodes = _selector_nodes(selector)
+            if not nodes:
+                return {"status": "unavailable", "reason": "poco target not found", "query": normalized, "text": text}
+            if hasattr(selector, "set_text"):
+                selector.set_text(text)
+            elif hasattr(nodes[0], "set_text"):
+                nodes[0].set_text(text)
+            else:
+                return {
+                    "status": "unavailable",
+                    "reason": "poco node has no set_text method",
+                    "query": normalized,
+                    "text": text,
+                }
+        except Exception as exc:  # pragma: no cover
+            return {
+                "status": "unavailable",
+                "reason": f"poco set_text failed: {type(exc).__name__}: {exc}",
+                "query": normalized,
+                "text": text,
+            }
+        return {
+            "status": "success",
+            "query": normalized,
+            "locator_type": "resource_id",
+            "text": text,
+            "target": _node_summary(nodes[0]),
+        }
+
     def text(self, text: str) -> dict[str, Any]:
         """读取匹配控件的文本值。"""
 

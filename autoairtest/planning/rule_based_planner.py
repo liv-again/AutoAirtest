@@ -147,6 +147,8 @@ class RuleBasedPlanner:
                 if intent == "navigate"
                 else self.skill_registry.match_stock_detail_element(f"{stock_detail_context} {target}")
             )
+            if matched_element is None and intent != "navigate":
+                matched_element = self.skill_registry.match_non_text_control(f"{stock_detail_context} {target}")
             actions.append(PlanAction(
                 action_id=f"a{index}",
                 intent=intent,

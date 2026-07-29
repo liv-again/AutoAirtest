@@ -1,0 +1,24 @@
+# 搜索页非文本控件定义
+# 使用稳定 element ID 和有序定位器，格式风格与 skills/stock_detail/fenshi_elements_1.yaml 保持一致。
+version: 1
+schema: non_text_controls
+source: ../../非文本类控件补充.md
+page_id: search
+page_name: 搜索页面
+
+roots: []
+
+elements:
+  search_input:
+    text: 搜索输入框
+    parent: null
+    aliases: [搜索栏, 股票搜索框, 搜索页输入框, 输入框]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/search_pagenavi_editview
+      - type: text
+        value: 股票/基金/资讯/问答
+      - type: text
+        value: 搜索股票/理财
+    description: 搜索页面输入框，resource-id 为首选定位方式；text 值为 placeholder 文本，支持前缀匹配尝试点击

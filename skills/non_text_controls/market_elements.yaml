@@ -1,0 +1,40 @@
+# 行情页非文本控件定义
+# 使用稳定 element ID 和有序定位器，格式风格与 skills/stock_detail/fenshi_elements_1.yaml 保持一致。
+version: 1
+schema: non_text_controls
+source: ../../非文本类控件补充.md
+page_id: market
+page_name: 行情
+
+roots: []
+
+elements:
+  market_search_button:
+    text: 搜索按钮
+    parent: null
+    aliases: [行情搜索, 股票搜索]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/new_title_search
+    description: 行情页标题栏右侧搜索图标，Poco name/desc 为"股票搜索"
+
+  market_ranking_edit:
+    text: 榜单编辑
+    parent: null
+    aliases: [编辑榜单, 排行编辑, 榜单更多]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/ranking_tab_more
+    description: 行情-行情-A股-沪深京，股票排行中各榜单按钮右侧的编辑图标
+
+  market_watchlist_group:
+    text: 自选分组
+    parent: null
+    aliases: [自选菜单, 分组管理, 自选管理]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/slidingmenu_menu
+    description: 行情-自选，标题栏右侧自选分组图标

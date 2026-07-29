@@ -63,7 +63,8 @@ class PlanningAgent:
             return None
         try:
             plan = self._apply_navigation_path(self._execution_plan_from_dict(data), case, navigation_path)
-            return self._apply_stock_detail_locators(plan, case)
+            plan = self._apply_stock_detail_locators(plan, case)
+            return self._apply_non_text_control_locators(plan, case)
         except (KeyError, TypeError, ValueError):
             return None
 
@@ -72,12 +73,14 @@ class PlanningAgent:
         stock_detail_section = self._stock_detail_prompt_section(case)
         expected_result_section = self._expected_result_rules_section()
         nav_constraint = self._nav_context_section(navigation_path or [])
+        non_text_section = self._non_text_control_prompt_section()
         return (
             f"{base_prompt}\n\n"
             f"{expected_result_section}\n\n"
             f"{self._navigation_rules_section()}\n\n"
             f"{nav_constraint}\n\n"
             f"{stock_detail_section}\n\n"
+            f"{non_text_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -135,6 +138,20 @@ class PlanningAgent:
             f"- {element.element_id}: text={element.text}, aliases={list(element.aliases)}, "
             f"locators=[{locator_text}]"
         )
+
+    def _non_text_control_prompt_section(self) -> str:
+        """构建非文本控件提示段，告知 LLM 可用非文本控件及其 resource-id。"""
+        if self.skill_registry is None or not self.skill_registry.non_text_elements:
+            return "Non-text control skill: no elements registered."
+        lines = [
+            "Non-text control skill: the following icon-only / non-text controls are available "
+            "across pages. When a test step refers to these by business name, use the resource_id "
+            "as the preferred locator. Do not invent a resource_id that is not listed below.",
+        ]
+        for element in self.skill_registry.non_text_elements.values():
+            locator_text = ", ".join(f"{item.type}={item.value}" for item in element.locators) or "none"
+            lines.append(f"- {element.element_id}: text={element.text}, locators=[{locator_text}]")
+        return "\n".join(lines)
 
     def _expected_result_rules_section(self) -> str:
         """加载并注入预期结果解读规则到 LLM prompt。
@@ -306,6 +323,67 @@ class PlanningAgent:
         notes = _append_unique(
             plan.manual_review_notes,
             "Stock-detail actions enriched from skills/stock_detail/fenshi_elements_1.yaml.",
+        )
+        return replace(plan, actions=actions, interpretation_rationales=rationales, manual_review_notes=notes)
+
+    def _apply_non_text_control_locators(
+        self,
+        plan: ExecutionPlan,
+        case: NaturalLanguageTestCase,
+    ) -> ExecutionPlan:
+        """对计划动作补充非文本控件的 resource-id 定位器。"""
+        if self.skill_registry is None or not self.skill_registry.non_text_elements:
+            return plan
+        case_context = self._navigation_context_for(case)
+
+        actions: list[PlanAction] = []
+        matched_elements: dict[str, Any] = {}
+        for action in plan.actions:
+            if action.intent == "navigate" or action.locators:
+                actions.append(action)
+                continue
+            element = self.skill_registry.match_non_text_control(
+                f"{case_context} {action.target_context} {action.target}"
+            )
+            if element is None or not element.locators:
+                actions.append(action)
+                continue
+            rationale_id = f"ir_non_text_{element.element_id}"
+            actions.append(
+                replace(
+                    action,
+                    preferred_locator=element.preferred_locator,
+                    locators=list(element.locators),
+                    interpretation_rationale_ids=_append_unique(
+                        action.interpretation_rationale_ids,
+                        rationale_id,
+                    ),
+                )
+            )
+            matched_elements[element.element_id] = element
+
+        if not matched_elements:
+            return plan
+        rationales = list(plan.interpretation_rationales)
+        for element in matched_elements.values():
+            rationale_id = f"ir_non_text_{element.element_id}"
+            if any(item.rationale_id == rationale_id for item in rationales):
+                continue
+            rationales.append(
+                InterpretationRationale(
+                    rationale_id=rationale_id,
+                    original_expression=case_context,
+                    normalized_meaning=element.text,
+                    interpretation_type="non_text_control",
+                    confidence=0.95,
+                    matched_skill_rules=[f"non_text_control.{element.element_id}"],
+                    basis=f"命中 non_text_control skill 元素 {element.element_id} 的 resource-id 定位器。",
+                    human_review_required=False,
+                )
+            )
+        notes = _append_unique(
+            plan.manual_review_notes,
+            "Non-text control actions enriched from skills/non_text_controls/.",
         )
         return replace(plan, actions=actions, interpretation_rationales=rationales, manual_review_notes=notes)
 

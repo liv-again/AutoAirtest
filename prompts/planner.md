@@ -1,5 +1,11 @@
 # Planner Prompt
 
+## Multi-Step Cases
+
+When the operation description contains lines prefixed with `步骤N:` (e.g. `步骤1: ...`, `步骤2: ...`), these are sequential steps of the same test case that should be executed in order on the device **without navigating back to the home page between steps**. Each `步骤N预期:` in the expected result corresponds to the verification goal for that step. The LLM should produce a single ExecutionPlan whose actions flow naturally from one step to the next — do NOT insert navigation-to-home or restart-from-top actions between steps.
+
+## Output Schema
+
 Return one JSON object with these required keys:
 
 - `case_id` (string)

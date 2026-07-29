@@ -83,6 +83,7 @@ class SkillRegistry:
         ) = self._load_stock_detail_elements()
         self.stock_detail_page_id = stock_detail_element_page_id or stock_detail_route_page_id
         self.market_codes = self._load_market_codes()
+        self.non_text_elements = self._load_non_text_control_elements()
         self.trade_success_keywords: tuple[str, ...] = ("订单号", "订单编号", "委托编号")
 
     def resolve_alias(self, text: str) -> str:
@@ -433,6 +434,76 @@ class SkillRegistry:
     def market_names(self) -> list[str]:
         """返回所有已注册的市场名称。"""
         return list(self.market_codes.keys())
+
+    # ------------------------------------------------------------------
+    # Non-text controls
+    # ------------------------------------------------------------------
+
+    def _load_non_text_control_elements(self) -> dict[str, StockDetailElement]:
+        """从 skills/non_text_controls/ 加载所有页面非文本控件元素。"""
+
+        elements: dict[str, StockDetailElement] = {}
+        pages = [
+            "home_elements.yaml",
+            "market_elements.yaml",
+            "search_elements.yaml",
+        ]
+        for filename in pages:
+            path = self.skills_root / "non_text_controls" / filename
+            if not path.exists():
+                continue
+            payload = self._load_yaml_or_simple_map(path)
+            raw_elements = payload.get("elements", {}) if isinstance(payload, dict) else {}
+            if not isinstance(raw_elements, dict):
+                continue
+            for element_id, raw_element in raw_elements.items():
+                if not isinstance(raw_element, dict):
+                    continue
+                locators: list[LocatorCandidate] = []
+                for raw_locator in _list_or_empty(raw_element.get("locators")):
+                    if not isinstance(raw_locator, dict):
+                        continue
+                    locator_type = str(raw_locator.get("type", "")).strip()
+                    if not locator_type or "value" not in raw_locator:
+                        continue
+                    locators.append(
+                        LocatorCandidate(
+                            type=locator_type,
+                            value=raw_locator["value"],
+                            coordinate_system=str(raw_locator.get("coordinate_system", "")),
+                        )
+                    )
+                elements[str(element_id)] = StockDetailElement(
+                    element_id=str(element_id),
+                    text=str(raw_element.get("text", "")),
+                    parent=str(raw_element["parent"]) if raw_element.get("parent") is not None else None,
+                    aliases=tuple(str(item) for item in _list_or_empty(raw_element.get("aliases"))),
+                    children=tuple(str(item) for item in _list_or_empty(raw_element.get("children"))),
+                    locators=tuple(locators),
+                    description=str(raw_element.get("description", "")),
+                    source_note=str(raw_element.get("source_note", "")),
+                )
+        return elements
+
+    def match_non_text_control(self, text: str) -> StockDetailElement | None:
+        """在非文本控件中按业务名称和别名匹配，返回最佳匹配元素。"""
+
+        context = str(text or "")
+        if not context or not self.non_text_elements:
+            return None
+
+        scored: list[tuple[int, int, str]] = []
+        for element in self.non_text_elements.values():
+            for term in (element.text, *element.aliases):
+                if not term:
+                    continue
+                index = context.rfind(term)
+                if index < 0:
+                    continue
+                scored.append((index + len(term), len(term), element.element_id))
+        if not scored:
+            return None
+        return self.non_text_elements[max(scored)[-1]]
 
 
 def _list_or_empty(value: Any) -> list[Any]:
