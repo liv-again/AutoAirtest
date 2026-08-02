@@ -20,10 +20,15 @@ def test_default_config_exposes_latest_design_session_logs_doctor_and_state_grap
     assert config["llm"]["enabled"] is False
     assert config["llm"]["provider"] == "openai_compatible"
     assert config["llm"]["base_url"] == "https://api.openai.com/v1"
+    assert config["llm"]["user_agent"] == "AutoAirtest/1.0"
     assert config["llm"]["api_key_env"] == "OPENAI_API_KEY"
     assert config["llm"]["use_for_planning"] is False
     assert config["llm"]["use_for_verification"] is True
+    assert config["llm"]["max_retries"] == 0
     assert config["llm"]["retry_backoff_seconds"] == 0.25
+    assert config["llm"]["timeout_seconds"] == 180
+    assert config["llm"]["stream"] is True
+    assert config["llm"]["stream_include_usage"] is True
 
 
 def test_merge_config_preserves_nested_latest_design_defaults():

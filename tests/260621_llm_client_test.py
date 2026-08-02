@@ -51,6 +51,23 @@ def test_llm_client_returns_uncertain_after_invalid_json_budget_exhausted():
     assert result["errors"][0]["type"] == "invalid_json"
 
 
+def test_llm_client_does_not_retry_by_default():
+    calls = []
+
+    def provider(payload):
+        calls.append(payload)
+        return "not json"
+
+    result = LLMClient(provider=provider).json_call(
+        "输出 JSON",
+        {"type": "object", "required": ["status"]},
+    )
+
+    assert result["status"] == "uncertain"
+    assert result["attempts"] == 1
+    assert len(calls) == 1
+
+
 def test_llm_client_redacts_sensitive_prompt_text_before_provider_call():
     calls = []
 
@@ -131,6 +148,7 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
             "api_key": "test-key",
             "model": "test-model",
             "timeout_seconds": 12,
+            "stream": False,
         }
     )
     result = client.json_call(
@@ -142,8 +160,11 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
     assert captured["url"] == "https://example.test/v1/chat/completions"
     assert captured["timeout"] == 12
     assert captured["headers"]["Authorization"] == "Bearer test-key"
+    assert captured["headers"]["User-agent"] == "AutoAirtest/1.0"
     assert captured["body"]["model"] == "test-model"
     assert captured["body"]["response_format"] == {"type": "json_object"}
+    assert captured["body"]["stream"] is False
+    assert "stream_options" not in captured["body"]
     assert result["data"]["manual_review_reason"] == "data_correctness"
     assert result["provider"] == {
         "model": "test-model-resolved",
@@ -159,6 +180,101 @@ def test_llm_client_builds_openai_compatible_request_when_enabled(monkeypatch):
         "cache_hit_ratio": 0.8,
     }
     assert result["attempt_usage"][0]["prompt_cache_hit_tokens"] == 80
+
+
+def test_llm_client_streams_openai_compatible_response_and_captures_final_usage(monkeypatch):
+    captured = {}
+    content = json.dumps(
+        {
+            "observation_summary": "页面证据已采集。",
+            "manual_review_reason": "data_correctness",
+        },
+        ensure_ascii=False,
+    )
+    split_at = len(content) // 2
+    chunks = [
+        {
+            "id": "req-stream-1",
+            "model": "test-model-resolved",
+            "choices": [{"delta": {"content": content[:split_at]}}],
+        },
+        {
+            "id": "req-stream-1",
+            "model": "test-model-resolved",
+            "choices": [{"delta": {"content": content[split_at:]}, "finish_reason": "stop"}],
+        },
+        {
+            "id": "req-stream-1",
+            "model": "test-model-resolved",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "prompt_cache_hit_tokens": 80,
+                "prompt_cache_miss_tokens": 20,
+                "completion_tokens": 10,
+                "total_tokens": 110,
+            },
+        },
+    ]
+
+    class FakeStreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def __iter__(self):
+            lines = [
+                f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+                for chunk in chunks
+            ]
+            lines.append(b"data: [DONE]\n\n")
+            return iter(lines)
+
+    def fake_urlopen(request, timeout=0):
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeStreamResponse()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
+
+    result = LLMClient(
+        config={
+            "enabled": True,
+            "base_url": "https://example.test/v1",
+            "api_key": "test-key",
+            "model": "test-model",
+        }
+    ).json_call(
+        "只输出 JSON",
+        {"type": "object", "required": ["observation_summary", "manual_review_reason"]},
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["manual_review_reason"] == "data_correctness"
+    assert captured["timeout"] == 180
+    assert captured["headers"]["Accept"] == "text/event-stream"
+    assert captured["body"]["stream"] is True
+    assert captured["body"]["stream_options"] == {"include_usage": True}
+    assert "max_tokens" not in captured["body"]
+    assert "max_completion_tokens" not in captured["body"]
+    assert result["provider"] == {
+        "model": "test-model-resolved",
+        "request_id": "req-stream-1",
+    }
+    assert result["usage"]["total_tokens"] == 110
+    assert result["usage"]["cache_hit_ratio"] == 0.8
+
+
+def test_openai_compatible_stream_rejects_truncated_response():
+    class TruncatedStream:
+        def __iter__(self):
+            return iter([b'data: {"choices":[{"delta":{"content":"{\\"status\\""}}]}\n\n'])
+
+    with pytest.raises(RuntimeError, match="ended before \\[DONE\\]"):
+        llm_client._read_openai_compatible_stream(TruncatedStream())
 
 
 def test_llm_client_accepts_legacy_provider_without_usage():
@@ -346,6 +462,7 @@ def test_llm_client_retries_retryable_http_errors(monkeypatch, status_code):
             "api_key": "test-key",
             "max_retries": 1,
             "retry_backoff_seconds": 0,
+            "stream": False,
         }
     )
 

@@ -35,6 +35,12 @@ class FakePocoAdapter:
     def click(self, text):
         return {"status": "success", "query": text}
 
+    def click_content_desc(self, content_desc):
+        return {"status": "success", "query": content_desc}
+
+    def click_resource_id(self, resource_id):
+        return {"status": "success", "query": resource_id}
+
 
 class FakeOCRAdapter:
     def recognize(self, screenshot_path):

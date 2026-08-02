@@ -18,6 +18,18 @@ class NavigationNode:
     parent: str | None
     aliases: tuple[str, ...]
     children: tuple[str, ...]
+    locators: tuple[LocatorCandidate, ...] = ()
+    control_ref: str = ""
+
+    @property
+    def preferred_locator(self) -> str:
+        if not self.locators:
+            return "poco_semantic"
+        return {
+            "resource_id": "poco_resource_id",
+            "content_desc": "poco_content_desc",
+            "text": "poco_text",
+        }.get(self.locators[0].type, "poco_semantic")
 
 
 @dataclass(frozen=True)
@@ -70,6 +82,7 @@ class SkillRegistry:
     def __init__(self, skills_root: str | Path) -> None:
         self.skills_root = Path(skills_root)
         self.aliases = self._load_aliases()
+        self.non_text_elements = self._load_non_text_control_elements()
         self.navigation_roots, self.navigation_nodes = self._load_navigation_nodes()
         (
             stock_detail_route_page_id,
@@ -83,7 +96,6 @@ class SkillRegistry:
         ) = self._load_stock_detail_elements()
         self.stock_detail_page_id = stock_detail_element_page_id or stock_detail_route_page_id
         self.market_codes = self._load_market_codes()
-        self.non_text_elements = self._load_non_text_control_elements()
         self.trade_success_keywords: tuple[str, ...] = ("订单号", "订单编号", "委托编号")
 
     def resolve_alias(self, text: str) -> str:
@@ -220,12 +232,22 @@ class SkillRegistry:
         for node_id, raw_node in raw_nodes.items():
             if not isinstance(raw_node, dict):
                 continue
+            text = str(raw_node.get("text", ""))
+            control_ref = str(raw_node.get("control_ref", "")).strip()
+            control = self.non_text_elements.get(control_ref)
+            aliases = [str(item) for item in _list_or_empty(raw_node.get("aliases"))]
+            locators = _locator_candidates(raw_node.get("locators"))
+            if control is not None:
+                aliases = _unique_strings([*aliases, control.text, *control.aliases], exclude={text})
+                locators = _merge_locator_candidates(locators, list(control.locators))
             nodes[str(node_id)] = NavigationNode(
                 node_id=str(node_id),
-                text=str(raw_node.get("text", "")),
+                text=text,
                 parent=str(raw_node["parent"]) if raw_node.get("parent") is not None else None,
-                aliases=tuple(str(item) for item in _list_or_empty(raw_node.get("aliases"))),
+                aliases=tuple(aliases),
                 children=tuple(str(item) for item in _list_or_empty(raw_node.get("children"))),
+                locators=tuple(locators),
+                control_ref=control_ref,
             )
         roots = [str(item) for item in raw_roots] if isinstance(raw_roots, list) else []
         return roots, nodes
@@ -246,20 +268,7 @@ class SkillRegistry:
         for element_id, raw_element in raw_elements.items():
             if not isinstance(raw_element, dict):
                 continue
-            locators: list[LocatorCandidate] = []
-            for raw_locator in _list_or_empty(raw_element.get("locators")):
-                if not isinstance(raw_locator, dict):
-                    continue
-                locator_type = str(raw_locator.get("type", "")).strip()
-                if not locator_type or "value" not in raw_locator:
-                    continue
-                locators.append(
-                    LocatorCandidate(
-                        type=locator_type,
-                        value=raw_locator["value"],
-                        coordinate_system=str(raw_locator.get("coordinate_system", "")),
-                    )
-                )
+            locators = _locator_candidates(raw_element.get("locators"))
             elements[str(element_id)] = StockDetailElement(
                 element_id=str(element_id),
                 text=str(raw_element.get("text", "")),
@@ -508,3 +517,45 @@ class SkillRegistry:
 
 def _list_or_empty(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _locator_candidates(value: Any) -> list[LocatorCandidate]:
+    locators: list[LocatorCandidate] = []
+    for raw_locator in _list_or_empty(value):
+        if not isinstance(raw_locator, dict):
+            continue
+        locator_type = str(raw_locator.get("type", "")).strip()
+        if not locator_type or "value" not in raw_locator:
+            continue
+        locators.append(
+            LocatorCandidate(
+                type=locator_type,
+                value=raw_locator["value"],
+                coordinate_system=str(raw_locator.get("coordinate_system", "")),
+            )
+        )
+    return locators
+
+
+def _merge_locator_candidates(
+    primary: list[LocatorCandidate],
+    inherited: list[LocatorCandidate],
+) -> list[LocatorCandidate]:
+    merged = list(primary)
+    existing = {(item.type, str(item.value), item.coordinate_system) for item in merged}
+    for item in inherited:
+        key = (item.type, str(item.value), item.coordinate_system)
+        if key not in existing:
+            merged.append(item)
+            existing.add(key)
+    return merged
+
+
+def _unique_strings(values: list[str], exclude: set[str] | None = None) -> list[str]:
+    excluded = exclude or set()
+    result: list[str] = []
+    for value in values:
+        normalized = str(value).strip()
+        if normalized and normalized not in excluded and normalized not in result:
+            result.append(normalized)
+    return result

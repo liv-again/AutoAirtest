@@ -55,13 +55,16 @@ class LLMClient:
             "provider": "openai_compatible",
             "base_url": "https://api.openai.com/v1",
             "chat_completions_path": "/chat/completions",
+            "user_agent": "AutoAirtest/1.0",
             "api_key_env": "OPENAI_API_KEY",
             "api_key": "",
             "model": "configured-by-env",
             "temperature": 0.1,
-            "max_retries": 2,
+            "max_retries": 0,
             "retry_backoff_seconds": 0.25,
-            "timeout_seconds": 60,
+            "timeout_seconds": 180,
+            "stream": True,
+            "stream_include_usage": True,
             "system_prompt": "你是移动 App 测试结果初判助手。只输出符合 schema 的 JSON。",
         } | (config or {})
         self.evidence_config = {
@@ -383,9 +386,10 @@ def _api_key_from_config(config: dict[str, Any]) -> str:
 
 def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provider:
     endpoint = _chat_completions_url(config)
-    timeout = float(config.get("timeout_seconds", 60) or 60)
+    timeout = float(config.get("timeout_seconds", 180) or 180)
+    stream_enabled = bool(config.get("stream", True))
 
-    def provider(payload: dict[str, Any]) -> str:
+    def provider(payload: dict[str, Any]) -> dict[str, Any]:
         user_content: str | list[dict[str, Any]] = str(payload.get("prompt", ""))
         images: list[str] = payload.get("images", [])
         if images:
@@ -400,19 +404,27 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
         }
         if config.get("response_format_json", True):
             request_body["response_format"] = {"type": "json_object"}
+        request_body["stream"] = stream_enabled
+        if stream_enabled and config.get("stream_include_usage", True):
+            request_body["stream_options"] = {"include_usage": True}
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "Accept": "application/json",
+                "Accept": "text/event-stream" if stream_enabled else "application/json",
+                "User-Agent": str(config.get("user_agent", "AutoAirtest/1.0")),
             },
             method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                response_text = response.read().decode("utf-8")
+                if stream_enabled:
+                    response_json = _read_openai_compatible_stream(response)
+                else:
+                    response_text = response.read().decode("utf-8")
+                    response_json = json.loads(response_text)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             retryable = exc.code == 429 or exc.code in {500, 502, 503, 504}
@@ -427,7 +439,6 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
                 retryable=True,
             ) from exc
 
-        response_json = json.loads(response_text)
         return {
             "content": _extract_openai_compatible_content(response_json),
             "usage": response_json.get("usage"),
@@ -436,6 +447,71 @@ def _openai_compatible_provider(config: dict[str, Any], api_key: str) -> Provide
         }
 
     return provider
+
+
+def _read_openai_compatible_stream(response: Any) -> dict[str, Any]:
+    """读取 OpenAI-compatible SSE，拼接文本并保留最终 usage。"""
+
+    content_parts: list[str] = []
+    usage: dict[str, Any] | None = None
+    model = ""
+    request_id = ""
+    done = False
+
+    for raw_line in response:
+        if isinstance(raw_line, bytes):
+            line = raw_line.decode("utf-8", errors="replace").strip()
+        else:
+            line = str(raw_line).strip()
+        if not line or line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            done = True
+            break
+        try:
+            chunk = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"LLM stream returned invalid JSON chunk: {exc}") from exc
+        if not isinstance(chunk, dict):
+            raise RuntimeError("LLM stream chunk is not an object")
+
+        if chunk.get("id"):
+            request_id = str(chunk["id"])
+        if chunk.get("model"):
+            model = str(chunk["model"])
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+
+        choices = chunk.get("choices", [])
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                content_parts.append(delta["content"])
+                continue
+            message = choice.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                content_parts.append(message["content"])
+                continue
+            if isinstance(choice.get("text"), str):
+                content_parts.append(choice["text"])
+
+    if not done:
+        raise RuntimeError("LLM stream ended before [DONE]")
+    if not content_parts:
+        raise RuntimeError("LLM stream does not contain message content")
+    return {
+        "id": request_id,
+        "model": model,
+        "choices": [{"message": {"content": "".join(content_parts)}}],
+        "usage": usage,
+    }
 
 
 def _chat_completions_url(config: dict[str, Any]) -> str:

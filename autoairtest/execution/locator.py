@@ -72,6 +72,16 @@ class Locator:
                     }
                     continue
                 last_response = self.poco.click_resource_id(str(value))
+            elif locator_type == "content_desc":
+                last_level = "poco_content_desc"
+                if not hasattr(self.poco, "click_content_desc"):
+                    last_response = {
+                        "status": "unavailable",
+                        "reason": "poco adapter does not support content_desc",
+                        "query": value,
+                    }
+                    continue
+                last_response = self.poco.click_content_desc(str(value))
             elif locator_type == "text":
                 last_level = "poco_text"
                 last_response = self.poco.click(str(value))

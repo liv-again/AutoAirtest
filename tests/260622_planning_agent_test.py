@@ -217,6 +217,105 @@ nodes:
     )
 
 
+def test_planning_agent_removes_llm_navigation_taps_already_covered_by_skill(tmp_path):
+    _write_expected_result_rules(tmp_path)
+    skill_dir = tmp_path / "skills" / "navigation"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("nodes.yaml").write_text(
+        """
+roots: [market]
+nodes:
+  market:
+    text: 行情
+    parent: null
+    aliases: []
+    locators:
+      - type: content_desc
+        value: 行情
+    children: [market_quotes]
+  market_quotes:
+    text: 行情
+    parent: market
+    aliases: [行情分类]
+    locators:
+      - type: resource_id
+        value: id/right_radio
+    children: [market_global]
+  market_global:
+    text: 全球
+    parent: market_quotes
+    aliases: [股指]
+    children: []
+""".strip(),
+        encoding="utf-8",
+    )
+
+    class FakeLLMClient:
+        def json_call(self, prompt, schema, **kwargs):
+            return {
+                "status": "success",
+                "data": {
+                    "case_id": "TC_1",
+                    "understanding": "检查国内指数并进入科创综指详情",
+                    "preconditions": [],
+                    "actions": [
+                        {
+                            "action_id": "raw1", "intent": "observe",
+                            "description": "观察当前页面（全球），确认页面状态", "target": "",
+                            "target_context": "全球", "preferred_locator": "",
+                        },
+                        {
+                            "action_id": "raw2", "intent": "tap",
+                            "description": "点击行情", "target": "行情",
+                            "target_context": "底部导航", "preferred_locator": "poco_semantic",
+                        },
+                        {
+                            "action_id": "raw3", "intent": "observe",
+                            "description": "观察行情页，确认已成功进入", "target": "",
+                            "target_context": "行情页", "preferred_locator": "",
+                        },
+                        {
+                            "action_id": "raw4", "intent": "tap",
+                            "description": "点击股指", "target": "股指",
+                            "target_context": "行情页", "preferred_locator": "poco_semantic",
+                        },
+                        {
+                            "action_id": "raw5", "intent": "observe",
+                            "description": "观察国内指数模块并获取顺序和数据", "target": "国内指数",
+                            "target_context": "全球页", "preferred_locator": "",
+                        },
+                        {
+                            "action_id": "raw6", "intent": "tap",
+                            "description": "点击科创综指", "target": "科创综指",
+                            "target_context": "国内指数", "preferred_locator": "poco_semantic",
+                        },
+                    ],
+                    "verification_goals": [],
+                    "manual_review_notes": [],
+                    "interpretation_rationales": [],
+                },
+            }
+
+    plan = PlanningAgent(
+        llm_client=FakeLLMClient(),
+        skill_registry=SkillRegistry(tmp_path / "skills"),
+    ).plan(_case())
+
+    assert [(action.intent, action.target) for action in plan.actions] == [
+        ("navigate", "行情"),
+        ("navigate", "行情"),
+        ("navigate", "全球"),
+        ("observe", ""),
+        ("observe", "国内指数"),
+        ("tap", "科创综指"),
+    ]
+    assert [action.action_id for action in plan.actions] == ["a1", "a2", "a3", "a4", "a5", "a6"]
+    assert plan.actions[0].preferred_locator == "poco_content_desc"
+    assert plan.actions[0].locators[0].value == "行情"
+    assert plan.actions[1].preferred_locator == "poco_resource_id"
+    assert plan.actions[1].locators[0].value == "id/right_radio"
+
+
 def _write_stock_detail_skill(tmp_path):
     skill_dir = tmp_path / "skills" / "stock_detail"
     skill_dir.mkdir(parents=True)

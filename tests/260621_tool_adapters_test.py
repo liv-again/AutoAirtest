@@ -129,6 +129,37 @@ def test_poco_adapter_clicks_short_resource_id_with_configured_package():
     assert selected_names == ["com.example.securities:id/backButton"]
 
 
+def test_poco_adapter_clicks_content_desc():
+    selected_descs = []
+
+    class FakeSelector:
+        def __iter__(self):
+            return iter([self])
+
+        def click(self):
+            return None
+
+        def get_text(self):
+            return ""
+
+        def get_bounds(self):
+            return [0, 0, 10, 10]
+
+        def attr(self, name):
+            return None
+
+    class FakePoco:
+        def __call__(self, **kwargs):
+            selected_descs.append(kwargs.get("desc"))
+            return FakeSelector()
+
+    result = PocoAdapter(poco=FakePoco()).click_content_desc("行情")
+
+    assert result["status"] == "success"
+    assert result["locator_type"] == "content_desc"
+    assert selected_descs == ["行情"]
+
+
 def test_poco_adapter_keeps_fully_qualified_resource_id_unchanged():
     selected_names = []
 

@@ -13,6 +13,9 @@
 - Find a target node by exact text, alias, and surrounding business context.
 - Build a path by walking from the target node through `parent` until reaching a root node.
 - Convert the path to low-risk Poco semantic tap actions using each node's `text`.
+- When a navigation node targets an icon or another non-text control, set `control_ref`
+  to an element ID from `skills/non_text_controls`. The node inherits that control's
+  aliases and locators, while node-local locators remain higher priority.
 
 ## Extension
 

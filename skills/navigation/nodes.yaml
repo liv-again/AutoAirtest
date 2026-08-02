@@ -24,6 +24,9 @@ nodes:
     parent: null
     aliases:
       - 行情首页
+    locators:
+      - type: content_desc
+        value: 行情
     children:
       - market_zixuan
       - market_quotes
@@ -40,6 +43,9 @@ nodes:
     aliases:
       - 行情页行情
       - 行情分类
+    locators:
+      - type: resource_id
+        value: id/right_radio
     children:
       - market_global
       - market_a_share
@@ -252,6 +258,7 @@ nodes:
     parent: market
     aliases:
       - 行情搜索
+    control_ref: market_search_button
     children: []
   trade:
     text: 交易

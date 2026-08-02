@@ -239,15 +239,14 @@ class PlanningAgent:
                 description=f"进入{node.text}",
                 target=node.text,
                 target_context=case.operation_description,
-                preferred_locator="poco_semantic",
+                preferred_locator=node.preferred_locator,
+                locators=list(node.locators),
                 action_risk_level=ActionRiskLevel.LOW,
                 interpretation_rationale_ids=[f"ir_navigation_{node.node_id}"],
             )
             for index, node in enumerate(navigation_path, start=1)
         ]
-        remaining_actions = [
-            action for action in plan.actions if action.intent != "navigate"
-        ]
+        remaining_actions = _remove_redundant_navigation_actions(plan.actions, navigation_path)
         renumbered_actions = _renumber_actions([*navigation_actions, *remaining_actions])
         rationales = _merge_rationales(
             plan.interpretation_rationales,
@@ -529,6 +528,62 @@ def _append_unique(values: list[str], value: str) -> list[str]:
 
 def _renumber_actions(actions: list[PlanAction]) -> list[PlanAction]:
     return [replace(action, action_id=f"a{index}") for index, action in enumerate(actions, start=1)]
+
+
+def _remove_redundant_navigation_actions(
+    actions: list[PlanAction],
+    navigation_path: list[NavigationNode],
+) -> list[PlanAction]:
+    """移除已经由确定性导航路径完成的 LLM 导航动作。
+
+    Planner prompt 要求 LLM 不使用 ``navigate``，因此模型可能把重复导航表达成
+    ``tap -> observe``。这里同时识别路径节点正文和别名，避免只过滤 intent 后仍把
+    相同导航步骤拼接到确定性路径后面。
+    """
+
+    if not navigation_path:
+        return list(actions)
+
+    path_terms = {
+        term.strip()
+        for node in navigation_path
+        for term in (node.text, *node.aliases)
+        if term.strip()
+    }
+    ancestor_terms = {
+        term.strip()
+        for node in navigation_path[:-1]
+        for term in (node.text, *node.aliases)
+        if term.strip()
+    }
+
+    remaining: list[PlanAction] = []
+    for action in actions:
+        intent = action.intent.strip().lower()
+        target = action.target.strip()
+        if intent == "navigate":
+            continue
+        if intent in {"tap", "click"} and target in path_terms:
+            continue
+        if intent == "observe" and _observes_stale_navigation_ancestor(action, ancestor_terms):
+            continue
+        remaining.append(action)
+    return remaining
+
+
+def _observes_stale_navigation_ancestor(
+    action: PlanAction,
+    ancestor_terms: set[str],
+) -> bool:
+    """判断 observe 是否只是确认已经走过的导航父节点。"""
+
+    target = action.target.strip()
+    if target in ancestor_terms:
+        return True
+    description = action.description.strip()
+    if not any(marker in description for marker in ("当前", "确认", "成功进入", "已进入")):
+        return False
+    return any(term in description for term in ancestor_terms)
 
 
 def _merge_rationales(

@@ -133,3 +133,26 @@ def test_locator_falls_back_from_resource_id_to_text_candidate():
     assert result["locator_level"] == "poco_text"
     assert poco.resource_ids == ["id/backButton"]
     assert poco.clicks == ["返回"]
+
+
+def test_locator_uses_content_desc_candidate():
+    class ContentDescPoco(FakePoco):
+        def __init__(self):
+            super().__init__()
+            self.content_descs = []
+
+        def click_content_desc(self, value):
+            self.content_descs.append(value)
+            return {"status": "success", "query": value, "locator_type": "content_desc"}
+
+    poco = ContentDescPoco()
+    result = Locator(poco, FakeOCR(), FakeAirtest()).locate_and_act(
+        "行情",
+        "screenshots/a.png",
+        locators=[LocatorCandidate(type="content_desc", value="行情")],
+    )
+
+    assert result["locator_level"] == "poco_content_desc"
+    assert result["selected_element"]["locator_type"] == "content_desc"
+    assert poco.content_descs == ["行情"]
+    assert poco.clicks == []

@@ -24,6 +24,9 @@ nodes:
     text: 行情
     parent: null
     aliases: []
+    locators:
+      - type: content_desc
+        value: 行情
     children: [market_a_share]
   market_a_share:
     text: A股
@@ -45,6 +48,8 @@ nodes:
 
     assert [node.node_id for node in path] == ["market", "market_a_share", "cn_a_market"]
     assert [node.text for node in path] == ["行情", "A股", "沪深京"]
+    assert path[0].preferred_locator == "poco_content_desc"
+    assert path[0].locators[0].value == "行情"
 
 
 def test_skill_registry_loads_and_matches_stock_detail_elements(tmp_path):

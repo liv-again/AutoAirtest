@@ -72,6 +72,37 @@ class PocoAdapter:
             return {"status": "unavailable", "reason": f"poco click failed: {type(exc).__name__}: {exc}", "query": text}
         return {"status": "success", "query": text, "target": _node_summary(nodes[0])}
 
+    def click_content_desc(self, content_desc: str) -> dict[str, Any]:
+        """按 Android content-desc 点击控件。"""
+
+        value = str(content_desc or "").strip()
+        if not value:
+            return {"status": "unavailable", "reason": "content_desc is empty", "query": value}
+        poco = self._poco()
+        if poco is None:
+            return {"status": "unavailable", "reason": "poco is not installed in torch", "query": value}
+        try:
+            selector = poco(desc=value)
+            nodes = _selector_nodes(selector)
+            if not nodes:
+                return {"status": "unavailable", "reason": "poco target not found", "query": value}
+            if hasattr(selector, "click"):
+                selector.click()
+            else:
+                nodes[0].click()
+        except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
+            return {
+                "status": "unavailable",
+                "reason": f"poco content_desc click failed: {type(exc).__name__}: {exc}",
+                "query": value,
+            }
+        return {
+            "status": "success",
+            "query": value,
+            "locator_type": "content_desc",
+            "target": _node_summary(nodes[0]),
+        }
+
     def query_resource_id(self, resource_id: str) -> dict[str, Any]:
         """按 Android resource-id 查询候选控件。"""
 
