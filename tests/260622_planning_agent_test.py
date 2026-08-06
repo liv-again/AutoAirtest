@@ -65,6 +65,45 @@ def test_planning_agent_uses_rule_based_fallback_without_llm():
     assert plan.verification_goals
 
 
+def test_rule_based_planner_treats_data_correctness_as_display_completeness():
+    case = replace(_case(), expected_result="数据显示正确")
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(PROJECT_ROOT / "skills")).plan(case)
+
+    goal = next(goal for goal in plan.verification_goals if goal.category.value == "data_correctness")
+    assert goal.claim == "目标实体及相关数据字段存在"
+    assert goal.expected_entities == ["国内指数"]
+    assert goal.review_reason == "data_display_completeness"
+    assert goal.human_review_required is False
+
+
+def test_rule_based_planner_treats_consistency_as_display_completeness():
+    case = replace(_case(), expected_result="页面数据与行情数据一致")
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(PROJECT_ROOT / "skills")).plan(case)
+
+    goal = next(goal for goal in plan.verification_goals if goal.category.value == "data_correctness")
+    assert goal.expected_entities == ["国内指数"]
+    assert goal.review_reason == "data_display_completeness"
+    assert goal.human_review_required is False
+
+
+def test_data_correctness_wording_does_not_generate_market_code_validation():
+    case = replace(
+        _case(),
+        feature_item="上证A股",
+        operation_description="进入行情-其他-上证A股",
+        expected_result="上证A股数据显示正确",
+    )
+
+    plan = RuleBasedPlanner(skill_registry=SkillRegistry(PROJECT_ROOT / "skills")).plan(case)
+
+    data_goals = [goal for goal in plan.verification_goals if goal.category.value == "data_correctness"]
+    assert len(data_goals) == 1
+    assert data_goals[0].review_reason == "data_display_completeness"
+    assert data_goals[0].expected_entities == ["上证A股"]
+
+
 def test_planner_places_all_stable_rules_before_case_specific_context():
     cases = load_test_cases(PROJECT_ROOT / "test-cases.xlsx", "需求测试报告")
     agent = PlanningAgent(skill_registry=SkillRegistry(PROJECT_ROOT / "skills"))
@@ -91,6 +130,37 @@ def test_planner_default_prompt_path_does_not_depend_on_current_directory(tmp_pa
     prompt = agent._planner_prompt(_case(), [])
 
     assert prompt.startswith("# Planner Prompt")
+
+
+def test_planner_injects_temporary_prompt_after_stable_rules_before_case(tmp_path):
+    temporary_prompt = tmp_path / "北交所ETF.md"
+    temporary_prompt.write_text("北交所ETF代码：950001", encoding="utf-8")
+    agent = PlanningAgent(
+        skill_registry=SkillRegistry(PROJECT_ROOT / "skills"),
+        temporary_prompt_paths=[temporary_prompt],
+    )
+
+    prompt = agent._planner_prompt(_case(), [])
+
+    assert "# Planner Prompt" in prompt
+    assert "## Temporary context source: 北交所ETF.md" in prompt
+    assert "北交所ETF代码：950001" in prompt
+    assert prompt.index("# Planner Prompt") < prompt.index("北交所ETF代码：950001")
+    assert prompt.index("北交所ETF代码：950001") < prompt.index("case_id: TC_1")
+
+
+def test_planner_rejects_missing_temporary_prompt(tmp_path):
+    agent = PlanningAgent(
+        skill_registry=SkillRegistry(PROJECT_ROOT / "skills"),
+        temporary_prompt_paths=[tmp_path / "missing.md"],
+    )
+
+    try:
+        agent._planner_prompt(_case(), [])
+    except FileNotFoundError as exc:
+        assert "Temporary planner prompt not found" in str(exc)
+    else:
+        raise AssertionError("missing temporary prompt should fail explicitly")
 
 
 def test_planner_passes_non_sensitive_call_context():

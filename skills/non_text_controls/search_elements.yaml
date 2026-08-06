@@ -21,4 +21,14 @@ elements:
         value: 股票/基金/资讯/问答
       - type: text
         value: 搜索股票/理财
-    description: 搜索页面输入框，resource-id 为首选定位方式；text 值为 placeholder 文本，支持前缀匹配尝试点击
+    description: 搜索页面输入框，resource-id 为首选定位方式；text 值为 placeholder 文本，必要时可按“搜索股票/理财”前缀匹配尝试点击
+
+  search_watchlist_toggle:
+    text: 加自选/删自选
+    parent: null
+    aliases: [加自选, 删自选, 添加自选, 删除自选, 自选切换]
+    children: []
+    locators:
+      - type: resource_id
+        value: id/iv_add_delete_selfstock
+    description: 搜索结果中的自选状态切换按钮；按钮会随当前状态执行加自选或删自选

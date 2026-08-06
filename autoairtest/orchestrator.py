@@ -72,6 +72,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
         llm_client=planning_llm_client,
         rule_based_planner=_build_rule_based_planner(skill_registry),
         skill_registry=skill_registry,
+        temporary_prompt_paths=_planning_temporary_prompt_paths(config, config_path),
     )
 
     cases = _filter_cases(_load_cases_or_dependency_case(config), config["input"].get("case_filter", ""))
@@ -109,6 +110,7 @@ def run_offline(config_overrides: dict[str, Any]) -> Path:
             retry_config=config.get("execution", {}).get("retry", {}),
             app_config=config.get("app", {}),
             evidence_config=config.get("evidence", {}),
+            save_full_ui_tree=bool(config.get("execution", {}).get("save_full_ui_tree", False)),
         )
 
     for case in cases:
@@ -361,6 +363,31 @@ def _load_cases_or_dependency_case(config: dict[str, Any]):
 
 
 # 根据配置决定规划阶段是否启用 LLM。
+def _planning_temporary_prompt_paths(config: dict[str, Any], config_path: str) -> list[Path]:
+    """解析并校验临时 Planner 提示词文件；相对路径以配置文件目录为基准。"""
+
+    raw_paths = config.get("planning", {}).get("temporary_prompt_files", [])
+    if raw_paths is None:
+        return []
+    if not isinstance(raw_paths, list):
+        raise ValueError("planning.temporary_prompt_files must be a list")
+
+    base_dir = Path(config_path).resolve().parent if config_path else Path.cwd()
+    resolved_paths: list[Path] = []
+    for raw_path in raw_paths:
+        value = str(raw_path or "").strip()
+        if not value:
+            raise ValueError("planning.temporary_prompt_files contains an empty path")
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = base_dir / path
+        path = path.resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Temporary planner prompt not found: {path}")
+        resolved_paths.append(path)
+    return resolved_paths
+
+
 def _planning_llm_client(
     config: dict[str, Any],
     telemetry_sink: Callable[[dict[str, Any]], None] | None = None,

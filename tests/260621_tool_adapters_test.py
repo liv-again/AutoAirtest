@@ -92,6 +92,59 @@ def test_poco_adapter_normalizes_dump_and_clicks_injected_poco():
     assert clicked == ["行情"]
 
 
+def test_poco_adapter_dump_reads_desc_name_resource_id_and_raw_tree():
+    class FakePoco:
+        def dump(self):
+            return {
+                "root": {
+                    "payload": {"name": "custom-list"},
+                    "children": [
+                        {
+                            "payload": {
+                                "desc": "950001",
+                                "resourceId": "com.example:id/etf_row",
+                                "bounds": "10,20,110,60",
+                            }
+                        }
+                    ],
+                }
+            }
+
+    result = PocoAdapter(poco=FakePoco(), save_full_ui_tree=True).dump()
+
+    assert result["status"] == "success"
+    assert "950001" in result["visible_texts"]
+    row = next(item for item in result["elements"] if item["desc"] == "950001")
+    assert row["resource_id"] == "com.example:id/etf_row"
+    assert row["bounds"] == [10, 20, 110, 60]
+    assert result["raw_dump"]["root"]["children"][0]["payload"]["desc"] == "950001"
+
+
+def test_poco_adapter_click_falls_back_to_content_desc():
+    clicked = []
+
+    class FakeSelector:
+        def __iter__(self):
+            return iter([self])
+
+        def click(self):
+            clicked.append("desc")
+
+    class FakePoco:
+        def __call__(self, **kwargs):
+            if "text" in kwargs:
+                return []
+            if kwargs.get("desc") == "950001":
+                return FakeSelector()
+            return []
+
+    result = PocoAdapter(poco=FakePoco()).click("950001")
+
+    assert result["status"] == "success"
+    assert result["locator_type"] == "content_desc"
+    assert clicked == ["desc"]
+
+
 def test_poco_adapter_clicks_short_resource_id_with_configured_package():
     selected_names = []
 

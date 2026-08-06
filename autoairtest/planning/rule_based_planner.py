@@ -307,7 +307,8 @@ class RuleBasedPlanner:
                     expected_entities=DEFAULT_DOMESTIC_ORDER,
                 )
             )
-        if self.skill_registry and self.skill_registry.market_codes:
+        data_existence_expected = self._is_data_existence_expectation(case.expected_result, goals)
+        if not data_existence_expected and self.skill_registry and self.skill_registry.market_codes:
             matched_markets = [m for m in self.skill_registry.market_names() if m in text]
             if matched_markets:
                 goals.append(
@@ -317,18 +318,17 @@ class RuleBasedPlanner:
                         expected_entities=matched_markets,
                     )
                 )
-        if "数据" in text or "一致" in text:
-            # 行情数据正确性缺少外部 Oracle，MVP 中必须进入人工复核。
-            # 但如果已有更具体的市场代码验证目标，则不再生成通用数据正确性目标。
-            if not any("市场" in g.claim or "股票代码" in g.claim for g in goals):
-                goals.append(
-                    self._goal(
-                        "行情数据正确性或两端一致性需要人工复核",
-                        VerificationGoalCategory.DATA_CORRECTNESS,
-                        human_review_required=True,
-                        review_reason="market data correctness requires human review",
-                    )
+        if data_existence_expected:
+            # 项目只验证数据是否存在，不校验数值正确性或一致性，也不因此转人工复核。
+            goals.append(
+                self._goal(
+                    "目标实体及相关数据字段存在",
+                    VerificationGoalCategory.DATA_CORRECTNESS,
+                    expected_entities=self._data_display_entities(case),
+                    human_review_required=False,
+                    review_reason="data_display_completeness",
                 )
+            )
         if "红涨绿跌黑平" in text or "颜色" in text:
             # 颜色规则依赖视觉证据和业务口径，离线核心不作最终裁决。
             goals.append(
@@ -371,6 +371,40 @@ class RuleBasedPlanner:
             return [e for e in entities if e]
         if "上证指数、深证成指、科创综指、北证50、创业板指" in text:
             return list(DETAIL_WITHOUT_INDUSTRY_ORDER)
+        return []
+
+    def _is_data_existence_expectation(
+        self,
+        expected_result: str,
+        goals: list[VerificationGoal],
+    ) -> bool:
+        """把数据相关的“正确/一致”等表述降级为存在性检查。"""
+
+        expected = str(expected_result or "")
+        if not any(keyword in expected for keyword in ("数据", "一致", "正确", "准确", "正常")):
+            return False
+        has_explicit_data_semantics = "数据" in expected or "一致" in expected
+        if ("颜色" in expected or "红涨绿跌黑平" in expected) and not has_explicit_data_semantics:
+            return False
+        has_specific_goal = any(
+            goal.category
+            in {
+                VerificationGoalCategory.PAGE_NAVIGATION,
+                VerificationGoalCategory.POPUP_DISPLAY,
+                VerificationGoalCategory.ELEMENT_ORDER,
+                VerificationGoalCategory.COLOR_RULE,
+            }
+            for goal in goals
+        )
+        return has_explicit_data_semantics or not has_specific_goal
+
+    def _data_display_entities(self, case: NaturalLanguageTestCase) -> list[str]:
+        """选择最具体的业务实体，避免要求多个层级标题附近都必须出现数值。"""
+
+        for value in (case.feature_item, case.feature_module, case.business_module):
+            entity = str(value or "").strip()
+            if entity:
+                return [entity]
         return []
 
     def _goal(

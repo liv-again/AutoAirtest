@@ -171,6 +171,30 @@ def test_rule_engine_data_display_completeness_entity_without_numbers_fails():
     assert judgment.structured_details["entities_without_numbers"] == ["科创板"]
 
 
+def test_data_display_policy_takes_priority_over_market_code_validation():
+    """“数据正确”目标只检查存在性，即使实体名称也命中市场代码规则。"""
+    goal = VerificationGoal(
+        goal_id="v_display_market",
+        claim="上证A股数据正确",
+        category=VerificationGoalCategory.DATA_CORRECTNESS,
+        expected_entities=["上证A股"],
+        evidence_priority=["poco_tree"],
+        human_review_required=False,
+        review_reason="data_display_completeness",
+    )
+
+    judgment = RuleEngine(market_code_prefixes={"上证A股": ["600", "601"]}).verify(
+        goal,
+        {
+            "visible_texts": ["上证A股", "123456", "+1.0%"],
+            "evidence_files": [],
+        },
+    )
+
+    assert judgment.preliminary_status.value == "pass"
+    assert judgment.structured_details["expected_entities"] == ["上证A股"]
+
+
 # ── 规则6: 数据格式校验 ──
 
 def test_rule_engine_data_format_all_valid():

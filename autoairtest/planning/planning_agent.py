@@ -32,11 +32,13 @@ class PlanningAgent:
         rule_based_planner: RuleBasedPlanner | None = None,
         skill_registry: SkillRegistry | None = None,
         prompt_path: str | Path | None = None,
+        temporary_prompt_paths: list[str | Path] | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.rule_based_planner = rule_based_planner or RuleBasedPlanner(skill_registry=skill_registry)
         self.skill_registry = skill_registry
         self.prompt_path = Path(prompt_path) if prompt_path else _DEFAULT_PLANNER_PROMPT
+        self.temporary_prompt_paths = tuple(Path(path) for path in (temporary_prompt_paths or []))
 
     def plan(self, case: NaturalLanguageTestCase) -> ExecutionPlan:
         if self.llm_client is not None and hasattr(self.llm_client, "json_call"):
@@ -74,6 +76,7 @@ class PlanningAgent:
         expected_result_section = self._expected_result_rules_section()
         nav_constraint = self._nav_context_section(navigation_path or [])
         non_text_section = self._non_text_control_prompt_section()
+        temporary_prompt_section = self._temporary_prompt_section()
         return (
             f"{base_prompt}\n\n"
             f"{expected_result_section}\n\n"
@@ -81,6 +84,7 @@ class PlanningAgent:
             f"{nav_constraint}\n\n"
             f"{stock_detail_section}\n\n"
             f"{non_text_section}\n\n"
+            f"{temporary_prompt_section}\n\n"
             "请将以下自然语言测试用例转换为 ExecutionPlan JSON。\n"
             f"case_id: {case.internal_id}\n"
             f"business_module: {case.business_module}\n"
@@ -94,6 +98,24 @@ class PlanningAgent:
         if not self.prompt_path.is_file():
             raise FileNotFoundError(f"Planner prompt not found: {self.prompt_path}")
         return self.prompt_path.read_text(encoding="utf-8").strip()
+
+    def _temporary_prompt_section(self) -> str:
+        """读取仅用于当前运行的附加业务上下文，不替换稳定 Planner 契约。"""
+
+        if not self.temporary_prompt_paths:
+            return ""
+        sections = [
+            "Temporary project context: use the following run-scoped business knowledge when relevant. "
+            "It supplements but does not override the output schema, safety rules, or stable project skills."
+        ]
+        for path in self.temporary_prompt_paths:
+            if not path.is_file():
+                raise FileNotFoundError(f"Temporary planner prompt not found: {path}")
+            content = path.read_text(encoding="utf-8").strip()
+            if not content:
+                raise ValueError(f"Temporary planner prompt is empty: {path}")
+            sections.append(f"## Temporary context source: {path.name}\n\n{content}")
+        return "\n\n".join(sections)
 
     def _navigation_rules_section(self) -> str:
         return (
@@ -183,8 +205,9 @@ class PlanningAgent:
             '（如页面标题"上证A股"、指数名称如"上证指数"、或股票代码如"600000"）。'
             '不要填列名/表头（"代码""名称""最新""涨幅"）。'
             'review_reason="data_display_completeness"，human_review_required=false\n'
-            '- 跨页面实体一致性：category="data_correctness"，expected_entities 填入要对比的实体，'
-            '在 review_reason 中注明 "cross_page_consistency"\n'
+            '- 预期结果中的“正确”“准确”“一致”“正常”统一按数据存在性解释，使用 '
+            'review_reason="data_display_completeness"、human_review_required=false；'
+            '不要比较数值，也不要仅因缺少外部 Oracle 而要求人工复核\n'
             '- 通用文本存在验证：category="text_present"，expected_entities 填入要检测的文本\n'
             "所有 verification_goals 的 evidence_priority 统一为 "
             '["poco_tree", "ocr_text", "screenshot"]'

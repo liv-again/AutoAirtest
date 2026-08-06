@@ -5,6 +5,18 @@ from autoairtest.agents.planner import RuleBasedPlanner as RealRuleBasedPlanner
 from autoairtest.models import ActionResult, ActionStatus, NaturalLanguageTestCase, PreliminaryJudgment, PreliminaryStatus
 
 
+def test_temporary_prompt_paths_are_relative_to_config_file(tmp_path):
+    context_file = tmp_path / "context.md"
+    context_file.write_text("temporary context", encoding="utf-8")
+
+    paths = orchestrator._planning_temporary_prompt_paths(
+        {"planning": {"temporary_prompt_files": ["context.md"]}},
+        str(tmp_path / "config.yaml"),
+    )
+
+    assert paths == [context_file.resolve()]
+
+
 def test_run_offline_writes_session_metadata_steps_crashes_and_state_graph(tmp_path, monkeypatch):
     case = NaturalLanguageTestCase(
         case_id="TC_session",
@@ -617,7 +629,7 @@ def test_run_offline_passes_llm_client_to_verifier_when_enabled(tmp_path, monkey
         precondition="",
         operation_description="行情-股指：查看国内指数",
         parameters="",
-        expected_result="数据展示正确",
+        expected_result="颜色规则正确",
         original_fields={},
     )
 

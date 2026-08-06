@@ -33,6 +33,9 @@ def default_config() -> dict[str, Any]:
         "skills": {
             "root": "skills",
         },
+        "planning": {
+            "temporary_prompt_files": [],
+        },
         "execution": {
             "llm": False,
             "mode": "offline",

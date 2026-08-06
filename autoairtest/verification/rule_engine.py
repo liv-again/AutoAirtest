@@ -96,7 +96,10 @@ class RuleEngine:
                 return self._conflicting_evidence_judgment(goal, evidence, conflict)
             return self._verify_text_presence(goal, visible_texts, evidence, evidence_source)
         if goal.category == VerificationGoalCategory.DATA_CORRECTNESS:
-            # 按优先级尝试各自动规则：市场代码 → 数据格式 → 跨页面一致性 → 数据展示完整性
+            # 项目级数据存在性政策优先于市场代码等语义规则，避免“正确/一致”被升级为数值校验。
+            if goal.review_reason == _REVIEW_REASON_DISPLAY:
+                return self._verify_data_display_completeness(goal, visible_texts, evidence, evidence_source)
+            # 其余结构化目标按优先级尝试：市场代码 → 数据格式 → 跨页面一致性 → 数据展示完整性
             if self._is_market_code_goal(goal):
                 return self._verify_market_code(goal, visible_texts, evidence, evidence_source)
             if self._is_data_format_goal(goal):

@@ -109,6 +109,7 @@ nodes:
       - third_board
       - risk_warning
       - delisting_arrangement
+      - etf
       - hs_closed_end_fund
       - sh_closed_end_fund
       - sz_closed_end_fund
@@ -189,6 +190,12 @@ nodes:
     parent: market_other
     aliases:
       - 退市整理股
+    children: []
+  etf:
+    text: ETF
+    parent: market_other
+    aliases:
+      - ETF基金
     children: []
   hs_closed_end_fund:
     text: 沪深封闭基金

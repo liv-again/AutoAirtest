@@ -14,6 +14,10 @@
 - Fall back to `content_desc` or normalized `position` when `resource_id` is unavailable.
 - Match elements by business name and aliases in the natural language context.
 - Disambiguate repeated business names by page context (`page_id`).
+- Treat a stateful control such as `search_watchlist_toggle` as one element with action aliases
+  (`加自选`, `删自选`, `添加自选`, `删除自选`); do not invent separate resource IDs for each state.
+- For the search input, prefer `id/search_pagenavi_editview`. Use the documented placeholder
+  text only as fallback; `搜索股票/理财` may be matched by prefix when the executor supports it.
 
 ## Planner Activation
 
@@ -27,6 +31,8 @@
 - Expand `id/backButton` to `<app.package>:id/backButton`.
 - If a short ID is used without `app.package`, return an explicit unavailable result instead of treating the ID as visible text.
 - Try locators in YAML order.
+- Treat values copied from the source document as trimmed values; punctuation used to quote a
+  value in prose is not part of the resource ID.
 
 ## Boundaries
 

@@ -42,11 +42,18 @@ class DeviceWorkflow:
         retry_config: dict[str, Any] | None = None,
         app_config: dict[str, Any] | None = None,
         evidence_config: dict[str, Any] | None = None,
+        save_full_ui_tree: bool = False,
         log_collector: Any | None = None,
     ) -> None:
         self.app_config = app_config or {}
         self.airtest = airtest or AirtestAdapter()
-        self.poco = poco or PocoAdapter(app_package=str(self.app_config.get("package", "")))
+        if poco is not None:
+            self.poco = poco
+        else:
+            poco_kwargs: dict[str, Any] = {"app_package": str(self.app_config.get("package", ""))}
+            if save_full_ui_tree:
+                poco_kwargs["save_full_ui_tree"] = True
+            self.poco = PocoAdapter(**poco_kwargs)
         self.ocr = ocr or OCRAdapter()
         self.stability_waiter_factory = stability_waiter_factory or self._default_stability_waiter
         self.correction_budget = correction_budget or {"low": 3, "medium": 1, "high": 0}

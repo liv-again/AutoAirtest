@@ -13,11 +13,17 @@ from typing import Any
 class PocoAdapter:
     """封装 Poco 语义查询和控件操作能力的适配器。"""
 
-    def __init__(self, poco: Any | None = None, app_package: str = "") -> None:
+    def __init__(
+        self,
+        poco: Any | None = None,
+        app_package: str = "",
+        save_full_ui_tree: bool = False,
+    ) -> None:
         """探测当前环境是否已安装 Poco。"""
 
         self.poco = poco
         self.app_package = str(app_package or "").strip()
+        self.save_full_ui_tree = bool(save_full_ui_tree)
         self.available = poco is not None or importlib.util.find_spec("poco") is not None
 
     def dump(self) -> dict[str, Any]:
@@ -31,7 +37,23 @@ class PocoAdapter:
         except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
             return {"status": "unavailable", "reason": f"poco dump failed: {type(exc).__name__}: {exc}", "visible_texts": []}
         elements = _elements_from_dump(raw_dump)
-        return {"status": "success", "visible_texts": [item["text"] for item in elements if item.get("text")], "elements": elements}
+        visible_texts: list[str] = []
+        for element in elements:
+            for key in ("text", "desc", "name", "resource_id"):
+                value = str(element.get(key, "") or "").strip()
+                if value and value not in visible_texts:
+                    visible_texts.append(value)
+        result: dict[str, Any] = {
+            "status": "success",
+            "visible_texts": visible_texts,
+            "elements": elements,
+            "element_count": len(elements),
+        }
+        # 原始树默认不写入，避免报告体积和敏感信息无谓膨胀；开启
+        # execution.save_full_ui_tree 后保留它，便于定位解析丢节点的问题。
+        if self.save_full_ui_tree:
+            result["raw_dump"] = _json_safe(raw_dump)
+        return result
 
     def query(self, text: str) -> dict[str, Any]:
         """按文本或语义标签查询候选控件。"""
@@ -39,11 +61,24 @@ class PocoAdapter:
         poco = self._poco()
         if poco is None:
             return {"status": "unavailable", "reason": "poco is not installed in torch", "query": text}
-        try:
-            nodes = _query_nodes(poco, text)
-        except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
-            return {"status": "unavailable", "reason": f"poco query failed: {type(exc).__name__}: {exc}", "query": text}
-        return {"status": "success", "query": text, "matches": [_node_summary(node) for node in nodes]}
+        failures: list[str] = []
+        for locator_type, kwargs in _query_variants(text):
+            try:
+                nodes = _selector_nodes(poco(**kwargs))
+            except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
+                failures.append(f"{locator_type}: {type(exc).__name__}: {exc}")
+                continue
+            if nodes:
+                return {
+                    "status": "success",
+                    "query": text,
+                    "locator_type": locator_type,
+                    "matches": [_node_summary(node) for node in nodes],
+                }
+        reason = "poco target not found by text/desc/name"
+        if failures:
+            reason += f" ({'; '.join(failures)})"
+        return {"status": "unavailable", "reason": reason, "query": text}
 
     def exists(self, text: str) -> dict[str, Any]:
         """判断目标文本或控件是否存在。"""
@@ -59,18 +94,29 @@ class PocoAdapter:
         poco = self._poco()
         if poco is None:
             return {"status": "unavailable", "reason": "poco is not installed in torch", "query": text}
-        try:
-            selector = poco(text=text)
-            nodes = _selector_nodes(selector)
-            if not nodes:
-                return {"status": "unavailable", "reason": "poco target not found", "query": text}
-            if hasattr(selector, "click"):
-                selector.click()
-            else:
-                nodes[0].click()
-        except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
-            return {"status": "unavailable", "reason": f"poco click failed: {type(exc).__name__}: {exc}", "query": text}
-        return {"status": "success", "query": text, "target": _node_summary(nodes[0])}
+        failures: list[str] = []
+        for locator_type, kwargs in _query_variants(text):
+            try:
+                selector = poco(**kwargs)
+                nodes = _selector_nodes(selector)
+                if not nodes:
+                    continue
+                if hasattr(selector, "click"):
+                    selector.click()
+                else:
+                    nodes[0].click()
+                return {
+                    "status": "success",
+                    "query": text,
+                    "locator_type": locator_type,
+                    "target": _node_summary(nodes[0]),
+                }
+            except Exception as exc:  # pragma: no cover - depends on third-party SDK behavior
+                failures.append(f"{locator_type}: {type(exc).__name__}: {exc}")
+        reason = "poco target not found by text/desc/name"
+        if failures:
+            reason += f" ({'; '.join(failures)})"
+        return {"status": "unavailable", "reason": reason, "query": text}
 
     def click_content_desc(self, content_desc: str) -> dict[str, Any]:
         """按 Android content-desc 点击控件。"""
@@ -251,21 +297,160 @@ def _dump_hierarchy(poco: Any) -> Any:
     return hierarchy.dump()
 
 
+_TEXT_KEYS = ("text", "label", "title", "hint")
+_DESC_KEYS = ("desc", "content_desc", "contentDescription", "description", "accessibilityLabel")
+_NAME_KEYS = ("name", "className", "class", "type")
+_RESOURCE_ID_KEYS = ("resourceId", "resource_id", "resource-id", "resource", "id")
+_CHILD_KEYS = ("children", "child", "nodes", "items")
+
+
 def _elements_from_dump(raw_dump: Any) -> list[dict[str, Any]]:
+    """把不同 Poco/Android dump 形态统一成可定位的节点摘要。
+
+    Poco 版本、驱动和自定义控件返回的树结构并不完全一致。除了 text，
+    desc/name/resourceId 也可能是唯一可用的定位信息，因此不能只保留文本节点。
+    """
+
     elements: list[dict[str, Any]] = []
 
     def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for child in node:
+                visit(child)
+            return
         if not isinstance(node, dict):
             return
+
         payload = node.get("payload", {}) if isinstance(node.get("payload"), dict) else {}
-        text = str(payload.get("text") or node.get("text") or "").strip()
-        if text:
-            elements.append({"text": text, "bounds": payload.get("bounds") or node.get("bounds"), "attributes": payload})
-        for child in node.get("children", []) if isinstance(node.get("children"), list) else []:
-            visit(child)
+        attributes: dict[str, Any] = {}
+        # 不把 node 本身合并进 attributes，避免把 children 整棵树重复嵌套到每个节点。
+        for container in (payload, node.get("attributes"), node.get("attrs"), node.get("properties")):
+            if isinstance(container, dict):
+                attributes.update(container)
+
+        def first_value(keys: tuple[str, ...]) -> str:
+            for container in (payload, node, attributes):
+                if not isinstance(container, dict):
+                    continue
+                for key in keys:
+                    value = container.get(key)
+                    if value is not None and str(value).strip():
+                        return str(value).strip()
+            return ""
+
+        text = first_value(_TEXT_KEYS)
+        desc = first_value(_DESC_KEYS)
+        name = first_value(_NAME_KEYS)
+        resource_id = first_value(_RESOURCE_ID_KEYS)
+        bounds = _normalize_bounds(
+            next(
+                (
+                    container.get(key)
+                    for container in (payload, node, attributes)
+                    if isinstance(container, dict)
+                    for key in ("bounds", "rect", "rectangle")
+                    if container.get(key) is not None
+                ),
+                None,
+            )
+        )
+        if bounds is None:
+            bounds = _bounds_from_pos_size(attributes)
+
+        aliases = _unique_strings((text, desc, name, resource_id))
+        if aliases or bounds is not None:
+            elements.append(
+                {
+                    "text": text or desc or name or resource_id,
+                    "desc": desc,
+                    "name": name,
+                    "resource_id": resource_id,
+                    "aliases": aliases,
+                    "bounds": bounds,
+                    "attributes": attributes,
+                }
+            )
+
+        for key in _CHILD_KEYS:
+            for container in (node, payload):
+                children = container.get(key) if isinstance(container, dict) else None
+                if isinstance(children, (list, dict)):
+                    visit(children)
+        # 有些驱动用 root/node/hierarchy 包一层，而不是 children。
+        for key in ("root", "node", "hierarchy", "tree"):
+            child = node.get(key)
+            if isinstance(child, (list, dict)):
+                visit(child)
 
     visit(raw_dump)
     return elements
+
+
+def _query_variants(text: str) -> tuple[tuple[str, dict[str, str]], ...]:
+    value = str(text or "").strip()
+    return (
+        ("text", {"text": value}),
+        ("content_desc", {"desc": value}),
+        ("name", {"name": value}),
+    )
+
+
+def _unique_strings(values: Any) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def _normalize_bounds(bounds: Any) -> list[int | float] | None:
+    if isinstance(bounds, dict):
+        try:
+            bounds = [bounds[key] for key in ("left", "top", "right", "bottom")]
+        except KeyError:
+            return None
+    if isinstance(bounds, str):
+        parts = bounds.replace(",", " ").split()
+        bounds = parts
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+        return None
+    try:
+        values = [float(item) for item in bounds]
+    except (TypeError, ValueError):
+        return None
+    if values[2] <= values[0] or values[3] <= values[1]:
+        return None
+    return [int(value) if value.is_integer() else value for value in values]
+
+
+def _bounds_from_pos_size(attributes: dict[str, Any]) -> list[float] | None:
+    """从 Poco 常见的归一化 pos/size 属性推导节点边界。"""
+
+    pos = attributes.get("pos")
+    size = attributes.get("size")
+    if not isinstance(pos, (list, tuple)) or not isinstance(size, (list, tuple)):
+        return None
+    if len(pos) != 2 or len(size) != 2:
+        return None
+    try:
+        center_x, center_y, width, height = (float(item) for item in (*pos, *size))
+    except (TypeError, ValueError):
+        return None
+    bounds = [center_x - width / 2, center_y - height / 2, center_x + width / 2, center_y + height / 2]
+    return _normalize_bounds(bounds)
+
+
+def _json_safe(value: Any) -> Any:
+    """把可选的原始树转换为可写入 JSON 的值。"""
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def _query_nodes(poco: Any, text: str) -> list[Any]:
@@ -309,8 +494,19 @@ def _node_summary(node: Any) -> dict[str, Any]:
     if hasattr(node, "get_bounds"):
         bounds = node.get_bounds()
     if hasattr(node, "attr"):
-        for name in ["name", "type", "text"]:
-            value = node.attr(name)
+        for name in [
+            "name",
+            "type",
+            "text",
+            "desc",
+            "contentDescription",
+            "resourceId",
+            "resource_id",
+        ]:
+            try:
+                value = node.attr(name)
+            except Exception:  # pragma: no cover - depends on third-party SDK behavior
+                continue
             if value is not None:
                 attributes[name] = value
     return {"text": text, "bounds": bounds, "attributes": attributes}

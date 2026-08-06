@@ -122,7 +122,7 @@ class Locator:
         allow_ocr: bool = True,
         ocr_evidence_path: str = "",
     ) -> dict[str, Any]:
-        match = _dump_match(target, dump)
+        match = _dump_match(target, dump, screenshot_path)
         if match:
             touch_point = _bounds_center(match["bounds"])
             response = self.airtest.touch(touch_point)
@@ -235,18 +235,69 @@ def valid_bounds(bounds: Any) -> bool:
     )
 
 
-def _dump_match(target: str, dump: dict[str, Any]) -> dict[str, Any] | None:
+def _dump_match(target: str, dump: dict[str, Any], screenshot_path: str = "") -> dict[str, Any] | None:
     elements = dump.get("elements", [])
     if not isinstance(elements, list):
         return None
     for element in elements:
         if not isinstance(element, dict):
             continue
-        text = str(element.get("text", ""))
-        bounds = element.get("bounds")
-        if target and target in text and valid_bounds(bounds):
-            return {"text": text, "bounds": bounds, "source": "dump"}
+        attributes = element.get("attributes", {})
+        candidates: list[tuple[str, str]] = []
+        for key in ("text", "desc", "content_desc", "name", "resource_id", "resourceId"):
+            value = str(element.get(key, "") or "").strip()
+            if value:
+                candidates.append((key, value))
+        aliases = element.get("aliases", [])
+        if isinstance(aliases, list):
+            candidates.extend(("alias", str(value).strip()) for value in aliases if str(value).strip())
+        if isinstance(attributes, dict):
+            for key in ("text", "desc", "content_desc", "contentDescription", "name", "resourceId", "resource_id"):
+                value = str(attributes.get(key, "") or "").strip()
+                if value:
+                    candidates.append((key, value))
+        bounds = _pixel_bounds(element.get("bounds"), screenshot_path)
+        if target and valid_bounds(bounds):
+            target_text = str(target).strip()
+            for matched_by, value in candidates:
+                if target_text in value:
+                    return {
+                        **element,
+                        "text": str(element.get("text", "") or value),
+                        "bounds": bounds,
+                        "source": "dump",
+                        "matched_by": matched_by,
+                        "matched_value": value,
+                    }
     return None
+
+
+def _pixel_bounds(bounds: Any, screenshot_path: str = "") -> list[int | float] | None:
+    """把 dump 中的归一化边界转换为 Airtest 可用的像素边界。"""
+
+    if not valid_bounds(bounds):
+        return None
+    values = [float(item) for item in bounds]
+    if not all(0 <= value <= 1 for value in values):
+        return [int(value) if value.is_integer() else value for value in values]
+    size = _image_size(screenshot_path)
+    if size is None:
+        return [int(value) if value.is_integer() else value for value in values]
+    width, height = size
+    pixel_values = [values[0] * width, values[1] * height, values[2] * width, values[3] * height]
+    return [int(value) if value.is_integer() else value for value in pixel_values]
+
+
+def _image_size(path: str) -> tuple[int, int] | None:
+    if not path:
+        return None
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            return image.size
+    except Exception:  # pragma: no cover - depends on optional image backend/file state
+        return None
 
 
 def _bounds_center(bounds: list[int | float]) -> tuple[int, int]:

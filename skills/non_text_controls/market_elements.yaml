@@ -17,7 +17,9 @@ elements:
     locators:
       - type: resource_id
         value: id/new_title_search
-    description: 行情页标题栏右侧搜索图标，Poco name/desc 为"股票搜索"
+      - type: content_desc
+        value: 股票搜索
+    description: 行情页标题栏右侧搜索图标，Poco name/desc 均为“股票搜索”
 
   market_ranking_edit:
     text: 榜单编辑

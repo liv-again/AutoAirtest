@@ -6,6 +6,7 @@ def test_default_config_exposes_latest_design_session_logs_doctor_and_state_grap
 
     assert config["execution"]["max_steps_per_case"] == 30
     assert config["execution"]["enable_state_graph"] is False
+    assert config["planning"]["temporary_prompt_files"] == []
     assert config["logs"]["enable_capture"] is True
     assert "FATAL EXCEPTION" in config["logs"]["crash_patterns"]
     assert config["report"]["session_name"] == ""

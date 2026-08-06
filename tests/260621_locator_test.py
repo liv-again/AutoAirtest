@@ -72,6 +72,33 @@ def test_locator_uses_dump_bounds_before_ocr():
     assert airtest.touches == [(130, 220)]
 
 
+def test_locator_matches_dump_content_desc_and_resource_id_aliases():
+    airtest = FakeAirtest()
+    dump = {
+        "status": "success",
+        "elements": [
+            {
+                "text": "",
+                "desc": "950001",
+                "resource_id": "com.example:id/etf_row",
+                "bounds": [100, 200, 160, 240],
+                "attributes": {"contentDescription": "950001"},
+            }
+        ],
+        "visible_texts": ["950001"],
+    }
+
+    result = Locator(FakePoco(status="unavailable"), FakeOCR(), airtest).locate_from_dump_and_screenshot(
+        "950001",
+        dump,
+        "screenshots/a.png",
+    )
+
+    assert result["locator_level"] == "dump_bounds"
+    assert result["selected_element"]["matched_by"] == "desc"
+    assert result["response"]["target"] == (130, 220)
+
+
 def test_locator_reports_unavailable_when_ocr_has_no_match():
     result = Locator(
         FakePoco(status="unavailable"),
